@@ -21,8 +21,8 @@ final class AppDatabase: Sendable {
             try db.create(table: "projects") { t in
                 t.column("id", .text).primaryKey()
                 t.column("name", .text).notNull()
-                t.column("folderPath", .text).notNull().unique()
-                t.column("alsFilePath", .text).notNull()
+                t.column("folderPath", .text).notNull()
+                t.column("alsFilePath", .text).notNull().unique()
                 t.column("sourceVolume", .text).notNull()
 
                 t.column("createdDate", .datetime)
@@ -61,6 +61,7 @@ final class AppDatabase: Sendable {
             try db.create(index: "projects_on_bpm", on: "projects", columns: ["bpm"])
             try db.create(index: "projects_on_sourceVolume", on: "projects", columns: ["sourceVolume"])
             try db.create(index: "projects_on_name", on: "projects", columns: ["name"])
+            try db.create(index: "projects_on_folderPath", on: "projects", columns: ["folderPath"])
 
             // Locations table
             try db.create(table: "locations") { t in

@@ -33,8 +33,6 @@ struct FileSystemCrawler: Sendable {
             return []
         }
 
-        var visitedFolders: Set<String> = []
-
         while let fileURL = enumerator.nextObject() as? URL {
             guard fileURL.pathExtension.lowercased() == "als" else {
                 continue
@@ -47,12 +45,6 @@ struct FileSystemCrawler: Sendable {
             }
 
             let folderURL = fileURL.deletingLastPathComponent()
-            let folderPath = folderURL.path
-
-            guard !visitedFolders.contains(folderPath) else {
-                continue
-            }
-            visitedFolders.insert(folderPath)
 
             // Get file attributes
             let resourceValues = try? fileURL.resourceValues(forKeys: resourceKeys)
@@ -60,7 +52,8 @@ struct FileSystemCrawler: Sendable {
             let createDate = resourceValues?.creationDate ?? modDate
 
             let volumeName = Self.volumeName(for: folderURL)
-            let projectName = folderURL.lastPathComponent
+            // Use the .als filename as the project name (without extension)
+            let projectName = fileURL.deletingPathExtension().lastPathComponent
 
             projects.append(DiscoveredProject(
                 folderPath: folderURL,

@@ -2,18 +2,21 @@ import SwiftUI
 
 struct SidebarView: View {
     @Environment(AppState.self) private var appState
+    @State private var isLibraryExpanded = true
+    @State private var isStatusExpanded = true
+    @State private var isTagsExpanded = true
+    @State private var isVolumesExpanded = true
+    @State private var isLocationsExpanded = true
 
     var body: some View {
         @Bindable var state = appState
 
         List(selection: $state.selectedFilter) {
-            
             Text("abledex")
                 .font(.largeTitle.bold())
                 .padding(.vertical, 4)
-                
-            
-            Section("Library") {
+
+            Section(isExpanded: $isLibraryExpanded) {
                 ForEach(ProjectFilter.allCases, id: \.self) { filter in
                     Label {
                         HStack {
@@ -30,9 +33,11 @@ struct SidebarView: View {
                     }
                     .tag(filter)
                 }
+            } header: {
+                Text("Library")
             }
 
-            Section("Status") {
+            Section(isExpanded: $isStatusExpanded) {
                 ForEach(CompletionStatus.allCases, id: \.self) { status in
                     Button {
                         if appState.selectedStatusFilter == status {
@@ -61,10 +66,47 @@ struct SidebarView: View {
                             : Color.clear
                     )
                 }
+            } header: {
+                Text("Status")
+            }
+
+            if !appState.uniqueTags.isEmpty {
+                Section(isExpanded: $isTagsExpanded) {
+                    ForEach(appState.uniqueTags, id: \.self) { tag in
+                        Button {
+                            if appState.selectedTagFilter == tag {
+                                appState.selectedTagFilter = nil
+                            } else {
+                                appState.selectedTagFilter = tag
+                            }
+                        } label: {
+                            Label {
+                                HStack {
+                                    Text(tag)
+                                    Spacer()
+                                    Text("\(tagCount(for: tag))")
+                                        .foregroundStyle(.secondary)
+                                        .font(.caption)
+                                }
+                            } icon: {
+                                Image(systemName: "tag")
+                                    .foregroundStyle(.tint)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(
+                            appState.selectedTagFilter == tag
+                                ? Color.accentColor.opacity(0.2)
+                                : Color.clear
+                        )
+                    }
+                } header: {
+                    Text("Tags")
+                }
             }
 
             if !appState.uniqueVolumes.isEmpty {
-                Section("Volumes") {
+                Section(isExpanded: $isVolumesExpanded) {
                     ForEach(appState.uniqueVolumes, id: \.self) { volume in
                         Button {
                             if appState.selectedVolumeFilter == volume {
@@ -92,10 +134,12 @@ struct SidebarView: View {
                                 : Color.clear
                         )
                     }
+                } header: {
+                    Text("Volumes")
                 }
             }
 
-            Section("Locations") {
+            Section(isExpanded: $isLocationsExpanded) {
                 ForEach(appState.locations) { location in
                     Label {
                         VStack(alignment: .leading) {
@@ -128,11 +172,30 @@ struct SidebarView: View {
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
+            } header: {
+                Text("Locations")
             }
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 8) {
+                // Active filters indicator
+                if hasActiveFilters {
+                    HStack {
+                        Text("Filters active")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Clear") {
+                            clearAllFilters()
+                        }
+                        .font(.caption)
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.tint)
+                    }
+                    .padding(.horizontal)
+                }
+
                 if appState.isScanning {
                     scanProgressView
                 }
@@ -155,6 +218,20 @@ struct SidebarView: View {
             .padding(.vertical, 8)
             .background(.bar)
         }
+    }
+
+    private var hasActiveFilters: Bool {
+        appState.selectedStatusFilter != nil ||
+        appState.selectedVolumeFilter != nil ||
+        appState.selectedTagFilter != nil ||
+        appState.selectedFilter != .all
+    }
+
+    private func clearAllFilters() {
+        appState.selectedStatusFilter = nil
+        appState.selectedVolumeFilter = nil
+        appState.selectedTagFilter = nil
+        appState.selectedFilter = .all
     }
 
     @ViewBuilder
@@ -218,6 +295,10 @@ struct SidebarView: View {
 
     private func projectCount(for volume: String) -> Int {
         appState.projects.filter { $0.sourceVolume == volume }.count
+    }
+
+    private func tagCount(for tag: String) -> Int {
+        appState.projects.filter { $0.userTags.contains(tag) }.count
     }
 
     private func statusCount(for status: CompletionStatus) -> Int {

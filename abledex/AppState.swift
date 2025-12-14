@@ -28,18 +28,20 @@ final class AppState {
     var selectedFilter: ProjectFilter = .all
     var selectedVolumeFilter: String?
     var selectedStatusFilter: CompletionStatus?
+    var selectedTagFilter: String?
 
     // MARK: - Computed Properties
 
     var filteredProjects: [ProjectRecord] {
         var result = projects
 
-        // Apply search filter
+        // Apply search filter (includes name, plugins, and tags)
         if !searchQuery.isEmpty {
             let query = searchQuery.lowercased()
             result = result.filter { project in
                 project.name.lowercased().contains(query) ||
-                project.plugins.contains { $0.lowercased().contains(query) }
+                project.plugins.contains { $0.lowercased().contains(query) } ||
+                project.userTags.contains { $0.lowercased().contains(query) }
             }
         }
 
@@ -68,6 +70,11 @@ final class AppState {
         // Apply status filter
         if let statusFilter = selectedStatusFilter {
             result = result.filter { $0.completionStatus == statusFilter }
+        }
+
+        // Apply tag filter
+        if let tagFilter = selectedTagFilter {
+            result = result.filter { $0.userTags.contains(tagFilter) }
         }
 
         // Apply sorting
@@ -107,6 +114,10 @@ final class AppState {
 
     var uniqueVolumes: [String] {
         Array(Set(projects.map { $0.sourceVolume })).sorted()
+    }
+
+    var uniqueTags: [String] {
+        Array(Set(projects.flatMap { $0.userTags })).sorted()
     }
 
     var projectCount: Int {
@@ -296,7 +307,7 @@ enum ProjectFilter: String, CaseIterable, Sendable {
     case all = "All Projects"
     case recentlyModified = "Recently Modified"
     case missingSamples = "Missing Samples"
-    case highBPM = "High BPM (140+)"
-    case normalBPM = "Normal BPM (100-130)"
+    case highBPM = "High BPM (130+)"
+    case normalBPM = "Normal BPM (>=100 & <130)"
     case lowBPM = "Low BPM (<100)"
 }
