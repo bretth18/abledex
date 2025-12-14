@@ -32,6 +32,37 @@ struct SidebarView: View {
                 }
             }
 
+            Section("Status") {
+                ForEach(CompletionStatus.allCases, id: \.self) { status in
+                    Button {
+                        if appState.selectedStatusFilter == status {
+                            appState.selectedStatusFilter = nil
+                        } else {
+                            appState.selectedStatusFilter = status
+                        }
+                    } label: {
+                        Label {
+                            HStack {
+                                Text(status.label)
+                                Spacer()
+                                Text("\(statusCount(for: status))")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            }
+                        } icon: {
+                            Image(systemName: status.icon)
+                                .foregroundStyle(statusColor(for: status))
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(
+                        appState.selectedStatusFilter == status
+                            ? Color.accentColor.opacity(0.2)
+                            : Color.clear
+                    )
+                }
+            }
+
             if !appState.uniqueVolumes.isEmpty {
                 Section("Volumes") {
                     ForEach(appState.uniqueVolumes, id: \.self) { volume in
@@ -81,12 +112,10 @@ struct SidebarView: View {
                         Button("Reveal in Finder") {
                             NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: location.path)
                         }
-                        if !location.isAutoDetected {
-                            Divider()
-                            Button("Remove Location", role: .destructive) {
-                                Task {
-                                    try? await appState.removeLocation(id: location.id)
-                                }
+                        Divider()
+                        Button("Remove Location", role: .destructive) {
+                            Task {
+                                try? await appState.removeLocation(id: location.id)
                             }
                         }
                     }
@@ -171,6 +200,8 @@ struct SidebarView: View {
             iconName = "exclamationmark.triangle"
         case .highBPM:
             iconName = "hare"
+        case .normalBPM:
+            iconName = "figure.walk"
         case .lowBPM:
             iconName = "tortoise"
         }
@@ -187,6 +218,20 @@ struct SidebarView: View {
 
     private func projectCount(for volume: String) -> Int {
         appState.projects.filter { $0.sourceVolume == volume }.count
+    }
+
+    private func statusCount(for status: CompletionStatus) -> Int {
+        appState.projects.filter { $0.completionStatus == status }.count
+    }
+
+    private func statusColor(for status: CompletionStatus) -> Color {
+        switch status {
+        case .none: return .secondary
+        case .idea: return .yellow
+        case .inProgress: return .blue
+        case .mixing: return .purple
+        case .done: return .green
+        }
     }
 
     private func selectFolder() {

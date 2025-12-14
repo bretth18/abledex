@@ -1,6 +1,44 @@
 import Foundation
 import GRDB
 
+enum CompletionStatus: Int, Codable, Sendable, CaseIterable {
+    case none = 0
+    case idea = 1
+    case inProgress = 2
+    case mixing = 3
+    case done = 4
+
+    var label: String {
+        switch self {
+        case .none: return "Not Set"
+        case .idea: return "Idea"
+        case .inProgress: return "In Progress"
+        case .mixing: return "Mixing"
+        case .done: return "Done"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .none: return "circle.dashed"
+        case .idea: return "lightbulb"
+        case .inProgress: return "hammer"
+        case .mixing: return "slider.horizontal.3"
+        case .done: return "checkmark.circle.fill"
+        }
+    }
+
+    var color: String {
+        switch self {
+        case .none: return "secondary"
+        case .idea: return "yellow"
+        case .inProgress: return "blue"
+        case .mixing: return "purple"
+        case .done: return "green"
+        }
+    }
+}
+
 struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "projects"
 
@@ -48,6 +86,7 @@ struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, Persista
     // User-added metadata (stored locally, not in .als)
     var userTagsJSON: String?
     var userNotes: String?
+    var completionStatus: CompletionStatus
 
     enum Columns: String, ColumnExpression {
         case id
@@ -74,6 +113,7 @@ struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, Persista
         case lastIndexedAt
         case userTagsJSON
         case userNotes
+        case completionStatus
     }
 }
 

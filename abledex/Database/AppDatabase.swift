@@ -52,6 +52,7 @@ final class AppDatabase: Sendable {
 
                 t.column("userTagsJSON", .text)
                 t.column("userNotes", .text)
+                t.column("completionStatus", .integer).notNull().defaults(to: 0)  // 0=none, 1=idea, 2=inProgress, 3=mixing, 4=done
             }
 
             // Indexes for common queries
@@ -117,7 +118,8 @@ extension AppDatabase {
     func saveProjects(_ projects: [ProjectRecord]) async throws {
         try await dbWriter.write { db in
             for project in projects {
-                try project.save(db, onConflict: .replace)
+                // Use upsert to handle existing folderPath conflicts
+                try project.upsert(db)
             }
         }
     }
@@ -125,6 +127,15 @@ extension AppDatabase {
     func deleteProject(id: UUID) async throws {
         _ = try await dbWriter.write { db in
             try db.execute(sql: "DELETE FROM projects WHERE id = ?", arguments: [id.uuidString])
+        }
+    }
+
+    func deleteProjects(ids: [UUID]) async throws {
+        guard !ids.isEmpty else { return }
+        try await dbWriter.write { db in
+            let placeholders = ids.map { _ in "?" }.joined(separator: ", ")
+            let sql = "DELETE FROM projects WHERE id IN (\(placeholders))"
+            try db.execute(sql: sql, arguments: StatementArguments(ids.map { $0.uuidString }))
         }
     }
 

@@ -14,7 +14,7 @@ final class AppState {
 
     var projects: [ProjectRecord] = []
     var locations: [LocationRecord] = []
-    var selectedProjectID: UUID?
+    var selectedProjectIDs: Set<UUID> = []
     var searchQuery: String = ""
 
     var isScanning: Bool = false
@@ -27,6 +27,7 @@ final class AppState {
     // Filtering
     var selectedFilter: ProjectFilter = .all
     var selectedVolumeFilter: String?
+    var selectedStatusFilter: CompletionStatus?
 
     // MARK: - Computed Properties
 
@@ -52,7 +53,9 @@ final class AppState {
         case .missingSamples:
             result = result.filter { $0.hasMissingSamples }
         case .highBPM:
-            result = result.filter { ($0.bpm ?? 0) >= 140 }
+            result = result.filter { ($0.bpm ?? 0) >= 130 }
+        case .normalBPM:
+            result = result.filter { ($0.bpm ?? 0) >= 100 && ($0.bpm ?? 0) < 130 }
         case .lowBPM:
             result = result.filter { ($0.bpm ?? 999) < 100 }
         }
@@ -60,6 +63,11 @@ final class AppState {
         // Apply volume filter
         if let volumeFilter = selectedVolumeFilter {
             result = result.filter { $0.sourceVolume == volumeFilter }
+        }
+
+        // Apply status filter
+        if let statusFilter = selectedStatusFilter {
+            result = result.filter { $0.completionStatus == statusFilter }
         }
 
         // Apply sorting
@@ -88,8 +96,13 @@ final class AppState {
     }
 
     var selectedProject: ProjectRecord? {
-        guard let id = selectedProjectID else { return nil }
+        guard selectedProjectIDs.count == 1,
+              let id = selectedProjectIDs.first else { return nil }
         return projects.first { $0.id == id }
+    }
+
+    var selectedProjects: [ProjectRecord] {
+        projects.filter { selectedProjectIDs.contains($0.id) }
     }
 
     var uniqueVolumes: [String] {
@@ -226,9 +239,14 @@ final class AppState {
     func deleteProject(_ project: ProjectRecord) async throws {
         try await database.deleteProject(id: project.id)
         projects.removeAll { $0.id == project.id }
-        if selectedProjectID == project.id {
-            selectedProjectID = nil
-        }
+        selectedProjectIDs.remove(project.id)
+    }
+
+    func deleteSelectedProjects() async throws {
+        let idsToDelete = selectedProjectIDs
+        try await database.deleteProjects(ids: Array(idsToDelete))
+        projects.removeAll { idsToDelete.contains($0.id) }
+        selectedProjectIDs.removeAll()
     }
 
     func updateProjectTags(_ project: ProjectRecord, tags: [String]) async throws {
@@ -244,6 +262,16 @@ final class AppState {
     func updateProjectNotes(_ project: ProjectRecord, notes: String) async throws {
         var updated = project
         updated.userNotes = notes
+        try await database.saveProject(updated)
+
+        if let index = projects.firstIndex(where: { $0.id == project.id }) {
+            projects[index] = updated
+        }
+    }
+
+    func updateProjectStatus(_ project: ProjectRecord, status: CompletionStatus) async throws {
+        var updated = project
+        updated.completionStatus = status
         try await database.saveProject(updated)
 
         if let index = projects.firstIndex(where: { $0.id == project.id }) {
@@ -269,5 +297,6 @@ enum ProjectFilter: String, CaseIterable, Sendable {
     case recentlyModified = "Recently Modified"
     case missingSamples = "Missing Samples"
     case highBPM = "High BPM (140+)"
+    case normalBPM = "Normal BPM (100-130)"
     case lowBPM = "Low BPM (<100)"
 }

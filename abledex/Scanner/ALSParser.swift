@@ -130,12 +130,8 @@ struct ALSParser: Sendable {
             }
         }
 
-        // Parse BPM - look for Tempo Manual Value
-        if let bpmValue = extractFirstDouble(from: xmlString, pattern: #"<Tempo>[^<]*<[^>]*Manual Value="([\d.]+)""#) {
-            result.bpm = bpmValue
-        } else if let bpmValue = extractFirstDouble(from: xmlString, pattern: #"<Manual Value="([\d.]+)"[^>]*/>\s*</Tempo>"#) {
-            result.bpm = bpmValue
-        }
+        // Parse BPM - extract from Tempo block
+        result.bpm = extractBPM(from: xmlString)
 
         // Parse time signature
         result.timeSignatureNumerator = extractFirstInt(from: xmlString, pattern: #"<TimeSignature>[^<]*<[^>]*Numerator Value="(\d+)""#) ?? 4
@@ -159,6 +155,32 @@ struct ALSParser: Sendable {
         result.samplePaths = extractSampleNames(from: xmlString)
 
         return result
+    }
+
+    private func extractBPM(from xmlString: String) -> Double? {
+        // Find the Tempo block and extract the Manual value
+        // The structure is: <Tempo>...<Manual Value="120" />...</Tempo>
+        guard let tempoStart = xmlString.range(of: "<Tempo>"),
+              let tempoEnd = xmlString.range(of: "</Tempo>", range: tempoStart.upperBound..<xmlString.endIndex) else {
+            return nil
+        }
+
+        let tempoBlock = String(xmlString[tempoStart.lowerBound..<tempoEnd.upperBound])
+
+        // Look for <Manual Value="XXX" /> within the Tempo block
+        let pattern = #"<Manual Value="([\d.]+)""#
+        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+            return nil
+        }
+
+        let range = NSRange(tempoBlock.startIndex..., in: tempoBlock)
+        guard let match = regex.firstMatch(in: tempoBlock, range: range),
+              match.numberOfRanges > 1,
+              let valueRange = Range(match.range(at: 1), in: tempoBlock) else {
+            return nil
+        }
+
+        return Double(tempoBlock[valueRange])
     }
 
     private func extractFirstDouble(from string: String, pattern: String) -> Double? {

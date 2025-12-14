@@ -127,7 +127,8 @@ final class ProjectScanner: Sendable {
                 hasMissingSamples: false, // Don't check - too slow and unreliable
                 lastIndexedAt: Date(),
                 userTagsJSON: nil,
-                userNotes: nil
+                userNotes: nil,
+                completionStatus: .none
             )
         } catch {
             print("Failed to parse \(discovered.projectName): \(error.localizedDescription)")

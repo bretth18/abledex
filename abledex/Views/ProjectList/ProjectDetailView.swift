@@ -3,6 +3,9 @@ import SwiftUI
 struct ProjectDetailView: View {
     let project: ProjectRecord
     @Environment(AppState.self) private var appState
+    @State private var editingNotes: String = ""
+    @State private var newTag: String = ""
+    @State private var isEditingNotes: Bool = false
 
     var body: some View {
         ScrollView {
@@ -12,8 +15,18 @@ struct ProjectDetailView: View {
 
                 Divider()
 
+                // Status picker
+                statusSection
+
+                Divider()
+
                 // Quick actions
                 actionsSection
+
+                Divider()
+
+                // Tags
+                tagsSection
 
                 Divider()
 
@@ -39,6 +52,13 @@ struct ProjectDetailView: View {
             .padding()
         }
         .frame(minWidth: 280)
+        .onAppear {
+            editingNotes = project.userNotes ?? ""
+        }
+        .onChange(of: project.id) {
+            editingNotes = project.userNotes ?? ""
+            isEditingNotes = false
+        }
     }
 
     private var headerSection: some View {
@@ -97,6 +117,122 @@ struct ProjectDetailView: View {
             .buttonStyle(.bordered)
 
             Spacer()
+        }
+    }
+
+    private var statusSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Status")
+                .font(.headline)
+
+            HStack(spacing: 8) {
+                ForEach(CompletionStatus.allCases, id: \.self) { status in
+                    Button {
+                        Task {
+                            try? await appState.updateProjectStatus(project, status: status)
+                        }
+                    } label: {
+                        VStack(spacing: 4) {
+                            Image(systemName: status.icon)
+                                .font(.title3)
+                            Text(status.label)
+                                .font(.caption2)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(project.completionStatus == status ? statusColor(status).opacity(0.2) : Color.clear)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(project.completionStatus == status ? statusColor(status) : Color.clear, lineWidth: 2)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(project.completionStatus == status ? statusColor(status) : .secondary)
+                }
+            }
+        }
+    }
+
+    private var tagsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Tags")
+                .font(.headline)
+
+            FlowLayout(spacing: 6) {
+                ForEach(project.userTags, id: \.self) { tag in
+                    HStack(spacing: 4) {
+                        Text(tag)
+                        Button {
+                            removeTag(tag)
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.tint.opacity(0.15))
+                    .foregroundStyle(.tint)
+                    .clipShape(Capsule())
+                }
+
+                // Add tag field
+                HStack(spacing: 4) {
+                    TextField("Add tag", text: $newTag)
+                        .textFieldStyle(.plain)
+                        .frame(width: 80)
+                        .onSubmit {
+                            addTag()
+                        }
+                    Button {
+                        addTag()
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(newTag.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+                .font(.caption)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(.quaternary)
+                .clipShape(Capsule())
+            }
+        }
+    }
+
+    private func addTag() {
+        let tag = newTag.trimmingCharacters(in: .whitespaces)
+        guard !tag.isEmpty, !project.userTags.contains(tag) else {
+            newTag = ""
+            return
+        }
+        var newTags = project.userTags
+        newTags.append(tag)
+        Task {
+            try? await appState.updateProjectTags(project, tags: newTags)
+        }
+        newTag = ""
+    }
+
+    private func removeTag(_ tag: String) {
+        var newTags = project.userTags
+        newTags.removeAll { $0 == tag }
+        Task {
+            try? await appState.updateProjectTags(project, tags: newTags)
+        }
+    }
+
+    private func statusColor(_ status: CompletionStatus) -> Color {
+        switch status {
+        case .none: return .secondary
+        case .idea: return .yellow
+        case .inProgress: return .blue
+        case .mixing: return .purple
+        case .done: return .green
         }
     }
 
@@ -215,16 +351,54 @@ struct ProjectDetailView: View {
 
     private var notesSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Notes")
-                .font(.headline)
+            HStack {
+                Text("Notes")
+                    .font(.headline)
+                Spacer()
+                if isEditingNotes {
+                    Button("Save") {
+                        saveNotes()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    Button("Cancel") {
+                        editingNotes = project.userNotes ?? ""
+                        isEditingNotes = false
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                } else {
+                    Button("Edit") {
+                        isEditingNotes = true
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
+            }
 
-            Text(project.userNotes ?? "No notes added")
-                .font(.callout)
-                .foregroundStyle(project.userNotes == nil ? .tertiary : .primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding()
-                .background(.quaternary)
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+            if isEditingNotes {
+                TextEditor(text: $editingNotes)
+                    .font(.callout)
+                    .frame(minHeight: 100)
+                    .padding(8)
+                    .background(.quaternary)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            } else {
+                Text(project.userNotes?.isEmpty == false ? project.userNotes! : "No notes added")
+                    .font(.callout)
+                    .foregroundStyle(project.userNotes?.isEmpty == false ? .primary : .tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding()
+                    .background(.quaternary)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+        }
+    }
+
+    private func saveNotes() {
+        Task {
+            try? await appState.updateProjectNotes(project, notes: editingNotes)
+            isEditingNotes = false
         }
     }
 }

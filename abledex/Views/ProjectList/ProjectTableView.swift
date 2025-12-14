@@ -2,11 +2,12 @@ import SwiftUI
 
 struct ProjectTableView: View {
     @Environment(AppState.self) private var appState
+    @State private var showDeleteConfirmation = false
 
     var body: some View {
         @Bindable var state = appState
 
-        Table(of: ProjectRecord.self, selection: $state.selectedProjectID) {
+        Table(of: ProjectRecord.self, selection: $state.selectedProjectIDs) {
             TableColumn("Name") { project in
                 HStack {
                     Image(systemName: "music.note")
@@ -102,27 +103,65 @@ struct ProjectTableView: View {
             ForEach(appState.filteredProjects) { project in
                 TableRow(project)
                     .contextMenu {
-                        Button("Open in Ableton") {
-                            appState.openProject(project)
-                        }
-                        Button("Reveal in Finder") {
-                            appState.revealProject(project)
-                        }
-                        Divider()
-                        Button("Copy Path") {
-                            NSPasteboard.general.clearContents()
-                            NSPasteboard.general.setString(project.folderPath, forType: .string)
-                        }
-                        Divider()
-                        Button("Remove from Library", role: .destructive) {
-                            Task {
-                                try? await appState.deleteProject(project)
+                        if appState.selectedProjectIDs.count > 1 {
+                            // Multi-selection context menu
+                            Button("Open \(appState.selectedProjectIDs.count) Projects in Ableton") {
+                                for proj in appState.selectedProjects {
+                                    appState.openProject(proj)
+                                }
+                            }
+                            Button("Reveal \(appState.selectedProjectIDs.count) Projects in Finder") {
+                                for proj in appState.selectedProjects {
+                                    appState.revealProject(proj)
+                                }
+                            }
+                            Divider()
+                            Button("Remove \(appState.selectedProjectIDs.count) Projects from Library", role: .destructive) {
+                                showDeleteConfirmation = true
+                            }
+                        } else {
+                            // Single selection context menu
+                            Button("Open in Ableton") {
+                                appState.openProject(project)
+                            }
+                            Button("Reveal in Finder") {
+                                appState.revealProject(project)
+                            }
+                            Divider()
+                            Button("Copy Path") {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(project.folderPath, forType: .string)
+                            }
+                            Divider()
+                            Button("Remove from Library", role: .destructive) {
+                                Task {
+                                    try? await appState.deleteProject(project)
+                                }
                             }
                         }
                     }
             }
         }
         .tableStyle(.inset(alternatesRowBackgrounds: true))
+        .onDeleteCommand {
+            if !appState.selectedProjectIDs.isEmpty {
+                showDeleteConfirmation = true
+            }
+        }
+        .confirmationDialog(
+            "Remove \(appState.selectedProjectIDs.count) project\(appState.selectedProjectIDs.count == 1 ? "" : "s") from library?",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Remove", role: .destructive) {
+                Task {
+                    try? await appState.deleteSelectedProjects()
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This only removes the projects from Abledex's index. The files will not be deleted from disk.")
+        }
     }
 }
 
