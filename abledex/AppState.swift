@@ -29,6 +29,8 @@ final class AppState {
     var selectedVolumeFilter: String?
     var selectedStatusFilter: CompletionStatus?
     var selectedTagFilter: String?
+    var selectedPluginFilter: String?
+    var showFavoritesOnly: Bool = false
 
     // MARK: - Computed Properties
 
@@ -49,6 +51,11 @@ final class AppState {
         switch selectedFilter {
         case .all:
             break
+        case .favorites:
+            result = result.filter { $0.isFavorite }
+        case .recentlyOpened:
+            let oneWeekAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
+            result = result.filter { ($0.lastOpenedAt ?? .distantPast) >= oneWeekAgo }
         case .recentlyModified:
             let oneWeekAgo = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
             result = result.filter { ($0.modifiedDate ?? $0.filesystemModifiedDate) >= oneWeekAgo }
@@ -77,6 +84,16 @@ final class AppState {
             result = result.filter { $0.userTags.contains(tagFilter) }
         }
 
+        // Apply plugin filter
+        if let pluginFilter = selectedPluginFilter {
+            result = result.filter { $0.plugins.contains(pluginFilter) }
+        }
+
+        // Apply favorites filter
+        if showFavoritesOnly {
+            result = result.filter { $0.isFavorite }
+        }
+
         // Apply sorting
         result.sort { a, b in
             let comparison: Bool
@@ -95,6 +112,10 @@ final class AppState {
                 comparison = (a.abletonVersion ?? "") < (b.abletonVersion ?? "")
             case .duration:
                 comparison = (a.duration ?? 0) < (b.duration ?? 0)
+            case .status:
+                comparison = a.completionStatus.rawValue < b.completionStatus.rawValue
+            case .lastOpened:
+                comparison = (a.lastOpenedAt ?? .distantPast) < (b.lastOpenedAt ?? .distantPast)
             }
             return sortAscending ? comparison : !comparison
         }
@@ -120,8 +141,22 @@ final class AppState {
         Array(Set(projects.flatMap { $0.userTags })).sorted()
     }
 
+    var uniquePlugins: [String] {
+        Array(Set(projects.flatMap { $0.plugins })).sorted()
+    }
+
     var projectCount: Int {
         projects.count
+    }
+
+    var favoritesCount: Int {
+        projects.filter { $0.isFavorite }.count
+    }
+
+    var recentlyOpenedProjects: [ProjectRecord] {
+        projects
+            .filter { $0.lastOpenedAt != nil }
+            .sorted { ($0.lastOpenedAt ?? .distantPast) > ($1.lastOpenedAt ?? .distantPast) }
     }
 
     // MARK: - Initialization
@@ -240,6 +275,16 @@ final class AppState {
     func openProject(_ project: ProjectRecord) {
         let alsURL = URL(fileURLWithPath: project.alsFilePath)
         NSWorkspace.shared.open(alsURL)
+
+        // Track last opened time
+        Task {
+            var updated = project
+            updated.lastOpenedAt = Date()
+            try? await database.saveProject(updated)
+            if let index = projects.firstIndex(where: { $0.id == project.id }) {
+                projects[index] = updated
+            }
+        }
     }
 
     func revealProject(_ project: ProjectRecord) {
@@ -289,6 +334,72 @@ final class AppState {
             projects[index] = updated
         }
     }
+
+    func toggleFavorite(_ project: ProjectRecord) async throws {
+        var updated = project
+        updated.isFavorite = !project.isFavorite
+        try await database.saveProject(updated)
+
+        if let index = projects.firstIndex(where: { $0.id == project.id }) {
+            projects[index] = updated
+        }
+    }
+
+    // MARK: - Batch Operations
+
+    func batchSetStatus(_ status: CompletionStatus) async throws {
+        for id in selectedProjectIDs {
+            if var project = projects.first(where: { $0.id == id }) {
+                project.completionStatus = status
+                try await database.saveProject(project)
+                if let index = projects.firstIndex(where: { $0.id == id }) {
+                    projects[index] = project
+                }
+            }
+        }
+    }
+
+    func batchAddTag(_ tag: String) async throws {
+        for id in selectedProjectIDs {
+            if var project = projects.first(where: { $0.id == id }) {
+                if !project.userTags.contains(tag) {
+                    var tags = project.userTags
+                    tags.append(tag)
+                    project.userTags = tags
+                    try await database.saveProject(project)
+                    if let index = projects.firstIndex(where: { $0.id == id }) {
+                        projects[index] = project
+                    }
+                }
+            }
+        }
+    }
+
+    func batchRemoveTag(_ tag: String) async throws {
+        for id in selectedProjectIDs {
+            if var project = projects.first(where: { $0.id == id }) {
+                var tags = project.userTags
+                tags.removeAll { $0 == tag }
+                project.userTags = tags
+                try await database.saveProject(project)
+                if let index = projects.firstIndex(where: { $0.id == id }) {
+                    projects[index] = project
+                }
+            }
+        }
+    }
+
+    func batchToggleFavorite(_ setFavorite: Bool) async throws {
+        for id in selectedProjectIDs {
+            if var project = projects.first(where: { $0.id == id }) {
+                project.isFavorite = setFavorite
+                try await database.saveProject(project)
+                if let index = projects.firstIndex(where: { $0.id == id }) {
+                    projects[index] = project
+                }
+            }
+        }
+    }
 }
 
 // MARK: - Supporting Types
@@ -301,13 +412,17 @@ enum SortColumn: String, CaseIterable, Sendable {
     case tracks = "Tracks"
     case version = "Version"
     case duration = "Duration"
+    case status = "Status"
+    case lastOpened = "Last Opened"
 }
 
 enum ProjectFilter: String, CaseIterable, Sendable {
     case all = "All Projects"
+    case favorites = "Favorites"
+    case recentlyOpened = "Recently Opened"
     case recentlyModified = "Recently Modified"
     case missingSamples = "Missing Samples"
     case highBPM = "High BPM (130+)"
-    case normalBPM = "Normal BPM (>=100 & <130)"
+    case normalBPM = "Normal BPM (100-130)"
     case lowBPM = "Low BPM (<100)"
 }

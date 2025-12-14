@@ -87,6 +87,8 @@ struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, Persista
     var userTagsJSON: String?
     var userNotes: String?
     var completionStatus: CompletionStatus
+    var isFavorite: Bool
+    var lastOpenedAt: Date?
 
     enum Columns: String, ColumnExpression {
         case id
@@ -114,6 +116,8 @@ struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, Persista
         case userTagsJSON
         case userNotes
         case completionStatus
+        case isFavorite
+        case lastOpenedAt
     }
 }
 

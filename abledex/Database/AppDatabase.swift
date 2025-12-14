@@ -53,6 +53,8 @@ final class AppDatabase: Sendable {
                 t.column("userTagsJSON", .text)
                 t.column("userNotes", .text)
                 t.column("completionStatus", .integer).notNull().defaults(to: 0)  // 0=none, 1=idea, 2=inProgress, 3=mixing, 4=done
+                t.column("isFavorite", .boolean).notNull().defaults(to: false)
+                t.column("lastOpenedAt", .datetime)
             }
 
             // Indexes for common queries

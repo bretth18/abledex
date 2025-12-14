@@ -4,6 +4,7 @@ struct SidebarView: View {
     @Environment(AppState.self) private var appState
     @State private var isLibraryExpanded = true
     @State private var isStatusExpanded = true
+    @State private var isPluginsExpanded = false
     @State private var isTagsExpanded = true
     @State private var isVolumesExpanded = true
     @State private var isLocationsExpanded = true
@@ -68,6 +69,47 @@ struct SidebarView: View {
                 }
             } header: {
                 Text("Status")
+            }
+
+            if !appState.uniquePlugins.isEmpty {
+                Section(isExpanded: $isPluginsExpanded) {
+                    ForEach(appState.uniquePlugins.prefix(20), id: \.self) { plugin in
+                        Button {
+                            if appState.selectedPluginFilter == plugin {
+                                appState.selectedPluginFilter = nil
+                            } else {
+                                appState.selectedPluginFilter = plugin
+                            }
+                        } label: {
+                            Label {
+                                HStack {
+                                    Text(plugin)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text("\(pluginCount(for: plugin))")
+                                        .foregroundStyle(.secondary)
+                                        .font(.caption)
+                                }
+                            } icon: {
+                                Image(systemName: "puzzlepiece.extension")
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(
+                            appState.selectedPluginFilter == plugin
+                                ? Color.accentColor.opacity(0.2)
+                                : Color.clear
+                        )
+                    }
+                    if appState.uniquePlugins.count > 20 {
+                        Text("+ \(appState.uniquePlugins.count - 20) more...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Plugins")
+                }
             }
 
             if !appState.uniqueTags.isEmpty {
@@ -224,6 +266,8 @@ struct SidebarView: View {
         appState.selectedStatusFilter != nil ||
         appState.selectedVolumeFilter != nil ||
         appState.selectedTagFilter != nil ||
+        appState.selectedPluginFilter != nil ||
+        appState.showFavoritesOnly ||
         appState.selectedFilter != .all
     }
 
@@ -231,6 +275,8 @@ struct SidebarView: View {
         appState.selectedStatusFilter = nil
         appState.selectedVolumeFilter = nil
         appState.selectedTagFilter = nil
+        appState.selectedPluginFilter = nil
+        appState.showFavoritesOnly = false
         appState.selectedFilter = .all
     }
 
@@ -271,6 +317,10 @@ struct SidebarView: View {
         switch filter {
         case .all:
             iconName = "music.note.list"
+        case .favorites:
+            iconName = "star.fill"
+        case .recentlyOpened:
+            iconName = "clock.arrow.circlepath"
         case .recentlyModified:
             iconName = "clock"
         case .missingSamples:
@@ -299,6 +349,10 @@ struct SidebarView: View {
 
     private func tagCount(for tag: String) -> Int {
         appState.projects.filter { $0.userTags.contains(tag) }.count
+    }
+
+    private func pluginCount(for plugin: String) -> Int {
+        appState.projects.filter { $0.plugins.contains(plugin) }.count
     }
 
     private func statusCount(for status: CompletionStatus) -> Int {

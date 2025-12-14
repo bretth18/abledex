@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(AppState.self) private var appState
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var showStatistics = false
 
     var body: some View {
         @Bindable var state = appState
@@ -14,9 +15,16 @@ struct ContentView: View {
             ProjectTableView()
                 .navigationSplitViewColumnWidth(min: 400, ideal: 600)
                 .navigationTitle(navigationTitle)
-                .searchable(text: $state.searchQuery, prompt: "Search projects...")
+                .navigationSubtitle("\(appState.filteredProjects.count) projects")
+                .searchable(text: $state.searchQuery, prompt: "Search projects, plugins, tags...")
                 .toolbar {
                     ToolbarItemGroup {
+                        Button {
+                            showStatistics = true
+                        } label: {
+                            Label("Statistics", systemImage: "chart.pie")
+                        }
+
                         sortMenu
                     }
                 }
@@ -28,11 +36,23 @@ struct ContentView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
+        .sheet(isPresented: $showStatistics) {
+            StatisticsView()
+        }
     }
 
     private var navigationTitle: String {
+        if let tagFilter = appState.selectedTagFilter {
+            return "Tag: \(tagFilter)"
+        }
+        if let pluginFilter = appState.selectedPluginFilter {
+            return "Plugin: \(pluginFilter)"
+        }
         if let volumeFilter = appState.selectedVolumeFilter {
             return volumeFilter
+        }
+        if let statusFilter = appState.selectedStatusFilter {
+            return statusFilter.label
         }
         return appState.selectedFilter.rawValue
     }
