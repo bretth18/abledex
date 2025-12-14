@@ -110,14 +110,14 @@ extension AppDatabase {
 extension AppDatabase {
     func saveProject(_ project: ProjectRecord) async throws {
         try await dbWriter.write { db in
-            try project.save(db)
+            try project.save(db, onConflict: .replace)
         }
     }
 
     func saveProjects(_ projects: [ProjectRecord]) async throws {
         try await dbWriter.write { db in
             for project in projects {
-                try project.save(db)
+                try project.save(db, onConflict: .replace)
             }
         }
     }

@@ -7,6 +7,12 @@ struct SidebarView: View {
         @Bindable var state = appState
 
         List(selection: $state.selectedFilter) {
+            
+            Text("abledex")
+                .font(.largeTitle.bold())
+                .padding(.vertical, 4)
+                
+            
             Section("Library") {
                 ForEach(ProjectFilter.allCases, id: \.self) { filter in
                     Label {
