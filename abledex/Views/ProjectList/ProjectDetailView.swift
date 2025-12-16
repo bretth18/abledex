@@ -6,6 +6,7 @@ struct ProjectDetailView: View {
     @State private var editingNotes: String = ""
     @State private var newTag: String = ""
     @State private var isEditingNotes: Bool = false
+    @State private var previewableAudio: [AudioPreviewService.PreviewableAudio] = []
 
     var body: some View {
         ScrollView {
@@ -39,6 +40,12 @@ struct ProjectDetailView: View {
                     pluginsSection
                 }
 
+                // Audio Preview
+                if !previewableAudio.isEmpty {
+                    Divider()
+                    audioPreviewSection
+                }
+
                 // Samples
                 if !project.samplePaths.isEmpty {
                     Divider()
@@ -54,10 +61,27 @@ struct ProjectDetailView: View {
         .frame(minWidth: 280)
         .onAppear {
             editingNotes = project.userNotes ?? ""
+            loadPreviewableAudio()
         }
         .onChange(of: project.id) {
             editingNotes = project.userNotes ?? ""
             isEditingNotes = false
+            appState.audioPreview.stop()
+            loadPreviewableAudio()
+        }
+        .onDisappear {
+            appState.audioPreview.stop()
+        }
+    }
+
+    private func loadPreviewableAudio() {
+        let folderPath = project.folderPath
+        let audioService = appState.audioPreview
+        Task.detached {
+            let audio = audioService.findPreviewableAudio(in: folderPath)
+            await MainActor.run {
+                previewableAudio = audio
+            }
         }
     }
 
@@ -125,33 +149,44 @@ struct ProjectDetailView: View {
             Text("Status")
                 .font(.headline)
 
-            HStack(spacing: 8) {
+            LazyVGrid(columns: [
+                GridItem(.adaptive(minimum: 56, maximum: 80), spacing: 6)
+            ], spacing: 6) {
                 ForEach(CompletionStatus.allCases, id: \.self) { status in
-                    Button {
-                        Task {
-                            try? await appState.updateProjectStatus(project, status: status)
-                        }
-                    } label: {
-                        VStack(spacing: 4) {
-                            Image(systemName: status.icon)
-                                .font(.title3)
-                            Text(status.label)
-                                .font(.caption2)
-                        }
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
-                        .background(project.completionStatus == status ? statusColor(status).opacity(0.2) : Color.clear)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(project.completionStatus == status ? statusColor(status) : Color.clear, lineWidth: 2)
-                        )
-                    }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(project.completionStatus == status ? statusColor(status) : .secondary)
+                    statusButton(for: status)
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func statusButton(for status: CompletionStatus) -> some View {
+        let isSelected = project.completionStatus == status
+        let color = statusColor(status)
+
+        Button {
+            Task {
+                try? await appState.updateProjectStatus(project, status: status)
+            }
+        } label: {
+            VStack(spacing: 4) {
+                Image(systemName: status.icon)
+                    .font(.body)
+                Text(status.label)
+                    .font(.caption2)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .frame(minWidth: 56, maxWidth: .infinity, minHeight: 48)
+            .background(isSelected ? color.opacity(0.2) : Color.gray.opacity(0.15))
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(isSelected ? color : Color.clear, lineWidth: 2)
+            )
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(isSelected ? color : Color.secondary)
     }
 
     private var tagsSection: some View {
@@ -320,6 +355,132 @@ struct ProjectDetailView: View {
         }
     }
 
+    private var audioPreviewSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Audio Preview")
+                    .font(.headline)
+
+                Spacer()
+
+                Button {
+                    appState.audioPreview.stop()
+                } label: {
+                    Label("Stop", systemImage: "stop.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .opacity(appState.audioPreview.isPlaying ? 1 : 0)
+                .disabled(!appState.audioPreview.isPlaying)
+            }
+
+            let recordedAudio = previewableAudio.filter { $0.isRecorded }
+            let otherAudio = previewableAudio.filter { !$0.isRecorded }
+
+            if !recordedAudio.isEmpty {
+                Text("Recorded")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                ForEach(recordedAudio.prefix(5)) { audio in
+                    audioRow(audio)
+                }
+
+                if recordedAudio.count > 5 {
+                    Text("+ \(recordedAudio.count - 5) more recordings")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+
+            if !otherAudio.isEmpty {
+                if !recordedAudio.isEmpty {
+                    Text("Samples")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 4)
+                }
+
+                ForEach(otherAudio.prefix(5)) { audio in
+                    audioRow(audio)
+                }
+
+                if otherAudio.count > 5 {
+                    Text("+ \(otherAudio.count - 5) more samples")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func audioRow(_ audio: AudioPreviewService.PreviewableAudio) -> some View {
+        let isCurrentlyPlaying = appState.audioPreview.currentlyPlayingURL == audio.url
+        let isPlaying = isCurrentlyPlaying && appState.audioPreview.isPlaying
+        let audioDuration = isCurrentlyPlaying ? appState.audioPreview.duration : (audio.duration ?? 0)
+
+        HStack(spacing: 8) {
+            Button {
+                appState.audioPreview.togglePlayPause(url: audio.url)
+            } label: {
+                Image(systemName: isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(isCurrentlyPlaying ? Color.accentColor : Color.secondary)
+            }
+            .buttonStyle(.plain)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text(audio.name)
+                        .font(.caption)
+                        .lineLimit(1)
+                        .foregroundStyle(isCurrentlyPlaying ? Color.primary : Color.secondary)
+
+                    Spacer()
+
+                    if audio.isRecorded {
+                        Image(systemName: "mic.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                    }
+
+                    Text(formatTime(isCurrentlyPlaying ? appState.audioPreview.playbackProgress : 0, total: audioDuration))
+                        .font(.caption2)
+                        .monospacedDigit()
+                        .foregroundStyle(.tertiary)
+                }
+
+                AudioScrubber(
+                    progress: isCurrentlyPlaying ? appState.audioPreview.playbackProgress : 0,
+                    duration: audioDuration,
+                    isActive: isCurrentlyPlaying,
+                    onSeek: { time in
+                        if isCurrentlyPlaying {
+                            appState.audioPreview.seek(to: time)
+                        } else {
+                            // Start playing and seek
+                            appState.audioPreview.play(url: audio.url)
+                            appState.audioPreview.seek(to: time)
+                        }
+                    }
+                )
+            }
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .background(isCurrentlyPlaying ? Color.accentColor.opacity(0.1) : Color.clear)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func formatTime(_ current: Double, total: Double) -> String {
+        let currentMins = Int(current) / 60
+        let currentSecs = Int(current) % 60
+        let totalMins = Int(total) / 60
+        let totalSecs = Int(total) % 60
+        return String(format: "%d:%02d / %d:%02d", currentMins, currentSecs, totalMins, totalSecs)
+    }
+
     private var samplesSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
@@ -417,6 +578,66 @@ struct Badge: View {
             .background(.tint.opacity(0.1))
             .foregroundStyle(.tint)
             .clipShape(Capsule())
+    }
+}
+
+struct AudioScrubber: View {
+    let progress: Double
+    let duration: Double
+    let isActive: Bool
+    let onSeek: (Double) -> Void
+
+    @State private var isDragging = false
+    @State private var dragProgress: Double = 0
+
+    private var displayProgress: Double {
+        isDragging ? dragProgress : progress
+    }
+
+    private var progressFraction: Double {
+        guard duration > 0 else { return 0 }
+        return displayProgress / duration
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack(alignment: .leading) {
+                // Track background
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(Color.gray.opacity(0.3))
+                    .frame(height: 4)
+
+                // Progress fill
+                RoundedRectangle(cornerRadius: 2)
+                    .fill(isActive ? Color.accentColor : Color.gray.opacity(0.5))
+                    .frame(width: max(0, geometry.size.width * progressFraction), height: 4)
+
+                // Thumb (only show when active or dragging)
+                if isActive || isDragging {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 10, height: 10)
+                        .offset(x: max(0, min(geometry.size.width - 10, geometry.size.width * progressFraction - 5)))
+                }
+            }
+            .frame(height: 10)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        isDragging = true
+                        let fraction = max(0, min(1, value.location.x / geometry.size.width))
+                        dragProgress = fraction * duration
+                    }
+                    .onEnded { value in
+                        let fraction = max(0, min(1, value.location.x / geometry.size.width))
+                        let seekTime = fraction * duration
+                        onSeek(seekTime)
+                        isDragging = false
+                    }
+            )
+        }
+        .frame(height: 10)
     }
 }
 
