@@ -15,7 +15,7 @@ struct AboutSettingsView: View {
                 HStack(alignment: .center, spacing: 4) {
                     Text("abledex")
                         .font(.largeTitle.bold())
-                    Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")")
+                    Text("version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown")")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                         .padding()
@@ -23,6 +23,7 @@ struct AboutSettingsView: View {
                 
                 VStack(alignment: .leading, spacing: 8) {
                     Text("© 2025 COMPUTER DATA")
+                        .foregroundStyle(.secondary)
                 }
             } header: {
                 Text("About")

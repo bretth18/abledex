@@ -12,6 +12,7 @@ struct ProjectDetailView: View {
     @Environment(AppState.self) private var appState
     @State private var editingNotes: String = ""
     @State private var newTag: String = ""
+    @State private var showTagSuggestions: Bool = false
     @State private var isEditingNotes: Bool = false
     @State private var previewableAudio: [AudioPreviewService.PreviewableAudio] = []
 
@@ -196,6 +197,14 @@ struct ProjectDetailView: View {
         .foregroundStyle(isSelected ? color : Color.secondary)
     }
 
+    private var tagSuggestions: [String] {
+        let query = newTag.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !query.isEmpty else { return [] }
+        return appState.uniqueTags.filter {
+            $0.lowercased().hasPrefix(query) && !project.userTags.contains($0)
+        }
+    }
+
     private var tagsSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Tags")
@@ -229,6 +238,27 @@ struct ProjectDetailView: View {
                         .onSubmit {
                             addTag()
                         }
+                        .onChange(of: newTag) {
+                            showTagSuggestions = !tagSuggestions.isEmpty
+                        }
+                        .popover(isPresented: $showTagSuggestions, arrowEdge: .bottom) {
+                            VStack(alignment: .leading, spacing: 0) {
+                                ForEach(tagSuggestions, id: \.self) { suggestion in
+                                    Button {
+                                        selectTagSuggestion(suggestion)
+                                    } label: {
+                                        Text(suggestion)
+                                            .frame(maxWidth: .infinity, alignment: .leading)
+                                            .padding(.horizontal, 10)
+                                            .padding(.vertical, 6)
+                                            .contentShape(Rectangle())
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
+                            .frame(minWidth: 120)
+                            .padding(.vertical, 4)
+                        }
                     Button {
                         addTag()
                     } label: {
@@ -258,6 +288,17 @@ struct ProjectDetailView: View {
             try? await appState.updateProjectTags(project, tags: newTags)
         }
         newTag = ""
+        showTagSuggestions = false
+    }
+
+    private func selectTagSuggestion(_ tag: String) {
+        var newTags = project.userTags
+        newTags.append(tag)
+        Task {
+            try? await appState.updateProjectTags(project, tags: newTags)
+        }
+        newTag = ""
+        showTagSuggestions = false
     }
 
     private func removeTag(_ tag: String) {
