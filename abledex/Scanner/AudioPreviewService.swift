@@ -37,10 +37,10 @@ final class AudioPreviewService {
         }
     }
 
-    nonisolated func findPreviewableAudio(in projectFolderPath: String) -> [PreviewableAudio] {
+    nonisolated func findPreviewableAudio(in projectFolderPath: String) async -> [PreviewableAudio] {
         let projectURL = URL(fileURLWithPath: projectFolderPath)
         let fileManager = FileManager.default
-        var audioFiles: [PreviewableAudio] = []
+        var collectedFiles: [(url: URL, isRecorded: Bool)] = []
 
         let supportedExtensions = ["wav", "aif", "aiff", "mp3", "m4a", "flac"]
 
@@ -49,13 +49,7 @@ final class AudioPreviewService {
         if let recordedFiles = try? fileManager.contentsOfDirectory(at: recordedFolder, includingPropertiesForKeys: nil) {
             for fileURL in recordedFiles {
                 if supportedExtensions.contains(fileURL.pathExtension.lowercased()) {
-                    let duration = getAudioDuration(url: fileURL)
-                    audioFiles.append(PreviewableAudio(
-                        url: fileURL,
-                        name: fileURL.lastPathComponent,
-                        duration: duration,
-                        isRecorded: true
-                    ))
+                    collectedFiles.append((fileURL, true))
                 }
             }
         }
@@ -65,13 +59,7 @@ final class AudioPreviewService {
         if let processedFiles = try? fileManager.contentsOfDirectory(at: processedFolder, includingPropertiesForKeys: [.isRegularFileKey]) {
             for fileURL in processedFiles where fileURL.hasDirectoryPath == false {
                 if supportedExtensions.contains(fileURL.pathExtension.lowercased()) {
-                    let duration = getAudioDuration(url: fileURL)
-                    audioFiles.append(PreviewableAudio(
-                        url: fileURL,
-                        name: fileURL.lastPathComponent,
-                        duration: duration,
-                        isRecorded: false
-                    ))
+                    collectedFiles.append((fileURL, false))
                 }
             }
         }
@@ -89,13 +77,7 @@ final class AudioPreviewService {
                     if let files = try? fileManager.contentsOfDirectory(at: subfolder, includingPropertiesForKeys: nil) {
                         for fileURL in files.prefix(10) { // Limit per subfolder
                             if supportedExtensions.contains(fileURL.pathExtension.lowercased()) {
-                                let duration = getAudioDuration(url: fileURL)
-                                audioFiles.append(PreviewableAudio(
-                                    url: fileURL,
-                                    name: fileURL.lastPathComponent,
-                                    duration: duration,
-                                    isRecorded: false
-                                ))
+                                collectedFiles.append((fileURL, false))
                             }
                         }
                     }
@@ -103,8 +85,32 @@ final class AudioPreviewService {
             }
         }
 
-        // Limit total results and sort (recorded first, then by name)
-        return Array(audioFiles.prefix(50)).sorted { a, b in
+        // Limit files before loading durations
+        let limitedFiles = Array(collectedFiles.prefix(50))
+
+        // Load durations concurrently
+        let audioFiles = await withTaskGroup(of: PreviewableAudio.self) { group in
+            for (fileURL, isRecorded) in limitedFiles {
+                group.addTask {
+                    let duration = await self.getAudioDuration(url: fileURL)
+                    return PreviewableAudio(
+                        url: fileURL,
+                        name: fileURL.lastPathComponent,
+                        duration: duration,
+                        isRecorded: isRecorded
+                    )
+                }
+            }
+
+            var results: [PreviewableAudio] = []
+            for await audio in group {
+                results.append(audio)
+            }
+            return results
+        }
+
+        // Sort (recorded first, then by name)
+        return audioFiles.sorted { a, b in
             if a.isRecorded != b.isRecorded {
                 return a.isRecorded
             }
@@ -112,16 +118,9 @@ final class AudioPreviewService {
         }
     }
 
-    nonisolated private func getAudioDuration(url: URL) -> TimeInterval? {
+    nonisolated private func getAudioDuration(url: URL) async -> TimeInterval? {
         let asset = AVURLAsset(url: url)
-        let duration = asset.duration
-        guard duration.isValid && !duration.isIndefinite else { return nil }
-        return CMTimeGetSeconds(duration)
-    }
-    
-    private func getAudioDurationAsync(url: URL) async throws  -> TimeInterval? {
-        let asset = AVURLAsset(url: url)
-        let duration = try await asset.load(.duration)
+        guard let duration = try? await asset.load(.duration) else { return nil }
         guard duration.isValid && !duration.isIndefinite else { return nil }
         return CMTimeGetSeconds(duration)
     }

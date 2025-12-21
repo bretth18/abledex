@@ -85,7 +85,7 @@ struct ProjectDetailView: View {
         let folderPath = project.folderPath
         let audioService = appState.audioPreview
         Task.detached {
-            let audio = audioService.findPreviewableAudio(in: folderPath)
+            let audio = await audioService.findPreviewableAudio(in: folderPath)
             await MainActor.run {
                 previewableAudio = audio
             }
