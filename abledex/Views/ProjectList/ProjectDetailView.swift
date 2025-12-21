@@ -1,3 +1,10 @@
+//
+//  ProjectDetailView.swift
+//  abledex
+//
+//  Created by Brett Henderson on 12/14/25.
+//
+
 import SwiftUI
 
 struct ProjectDetailView: View {
@@ -112,13 +119,13 @@ struct ProjectDetailView: View {
             // BPM and time signature badges
             HStack(spacing: 8) {
                 if let bpm = project.bpm {
-                    Badge(label: "\(Int(bpm)) BPM", icon: "metronome")
+                    BadgeView(label: "\(Int(bpm)) BPM", icon: "metronome")
                 }
                 if let timeSig = project.timeSignature {
-                    Badge(label: timeSig, icon: "clock")
+                    BadgeView(label: timeSig, icon: "clock")
                 }
                 if let duration = project.formattedDuration {
-                    Badge(label: duration, icon: "timer")
+                    BadgeView(label: duration, icon: "timer")
                 }
             }
         }
@@ -451,7 +458,7 @@ struct ProjectDetailView: View {
                         .foregroundStyle(.tertiary)
                 }
 
-                AudioScrubber(
+                AudioScrubberView(
                     progress: isCurrentlyPlaying ? appState.audioPreview.playbackProgress : 0,
                     duration: audioDuration,
                     isActive: isCurrentlyPlaying,
@@ -566,80 +573,7 @@ struct ProjectDetailView: View {
 
 // MARK: - Supporting Views
 
-struct Badge: View {
-    let label: String
-    let icon: String
 
-    var body: some View {
-        Label(label, systemImage: icon)
-            .font(.caption)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.tint.opacity(0.1))
-            .foregroundStyle(.tint)
-            .clipShape(Capsule())
-    }
-}
-
-struct AudioScrubber: View {
-    let progress: Double
-    let duration: Double
-    let isActive: Bool
-    let onSeek: (Double) -> Void
-
-    @State private var isDragging = false
-    @State private var dragProgress: Double = 0
-
-    private var displayProgress: Double {
-        isDragging ? dragProgress : progress
-    }
-
-    private var progressFraction: Double {
-        guard duration > 0 else { return 0 }
-        return displayProgress / duration
-    }
-
-    var body: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .leading) {
-                // Track background
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.gray.opacity(0.3))
-                    .frame(height: 4)
-
-                // Progress fill
-                RoundedRectangle(cornerRadius: 2)
-                    .fill(isActive ? Color.accentColor : Color.gray.opacity(0.5))
-                    .frame(width: max(0, geometry.size.width * progressFraction), height: 4)
-
-                // Thumb (only show when active or dragging)
-                if isActive || isDragging {
-                    Circle()
-                        .fill(Color.accentColor)
-                        .frame(width: 10, height: 10)
-                        .offset(x: max(0, min(geometry.size.width - 10, geometry.size.width * progressFraction - 5)))
-                }
-            }
-            .frame(height: 10)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        isDragging = true
-                        let fraction = max(0, min(1, value.location.x / geometry.size.width))
-                        dragProgress = fraction * duration
-                    }
-                    .onEnded { value in
-                        let fraction = max(0, min(1, value.location.x / geometry.size.width))
-                        let seekTime = fraction * duration
-                        onSeek(seekTime)
-                        isDragging = false
-                    }
-            )
-        }
-        .frame(height: 10)
-    }
-}
 
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
@@ -683,17 +617,5 @@ struct FlowLayout: Layout {
 
         let totalHeight = y + rowHeight
         return (CGSize(width: width, height: totalHeight), frames)
-    }
-}
-
-// MARK: - Empty State
-
-struct ProjectDetailEmptyView: View {
-    var body: some View {
-        ContentUnavailableView {
-            Label("No Project Selected", systemImage: "music.note")
-        } description: {
-            Text("Select a project from the list to view its details.")
-        }
     }
 }

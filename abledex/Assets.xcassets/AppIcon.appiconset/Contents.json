@@ -91,79 +91,79 @@
       "size" : "76x76"
     },
     {
-      "filename" : "ipad152.png",
+      "filename" : "abledexicon-iOS-Default-76x76@2x.png",
       "idiom" : "ipad",
       "scale" : "2x",
       "size" : "76x76"
     },
     {
-      "filename" : "ipadPro167.png",
+      "filename" : "abledexicon-iOS-Default-83.5x83.5@2x.png",
       "idiom" : "ipad",
       "scale" : "2x",
       "size" : "83.5x83.5"
     },
     {
-      "filename" : "appstore1024.png",
+      "filename" : "abledexicon-iOS-Default-1024x1024@1x.png",
       "idiom" : "ios-marketing",
       "scale" : "1x",
       "size" : "1024x1024"
     },
     {
-      "filename" : "mac16.png",
+      "filename" : "abledexicon-iOS-Default-16x16@1x.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "16x16"
     },
     {
-      "filename" : "mac32.png",
+      "filename" : "abledexicon-iOS-Default-16x16@2x.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "16x16"
     },
     {
-      "filename" : "mac32.png",
+      "filename" : "abledexicon-iOS-Default-32x32@1x.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "32x32"
     },
     {
-      "filename" : "mac64.png",
+      "filename" : "abledexicon-iOS-Default-32x32@2x.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "32x32"
     },
     {
-      "filename" : "mac128.png",
+      "filename" : "abledexicon-iOS-Default-128x128@1x.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "128x128"
     },
     {
-      "filename" : "mac256.png",
+      "filename" : "abledexicon-iOS-Default-128x128@2x.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "128x128"
     },
     {
-      "filename" : "mac256.png",
+      "filename" : "abledexicon-iOS-Default-256x256@1x.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "256x256"
     },
     {
-      "filename" : "mac512.png",
+      "filename" : "abledexicon-iOS-Default-256x256@2x.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "256x256"
     },
     {
-      "filename" : "mac512.png",
+      "filename" : "abledexicon-iOS-Default-512x512@1x.png",
       "idiom" : "mac",
       "scale" : "1x",
       "size" : "512x512"
     },
     {
-      "filename" : "mac1024.png",
+      "filename" : "abledexicon-iOS-Default-512x512@2x.png",
       "idiom" : "mac",
       "scale" : "2x",
       "size" : "512x512"

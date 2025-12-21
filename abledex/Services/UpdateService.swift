@@ -1,3 +1,10 @@
+//
+//  UpdateService.swift
+//  abledex
+//
+//  Created by Brett Henderson on 12/20/25.
+//
+
 import Foundation
 import AppKit
 

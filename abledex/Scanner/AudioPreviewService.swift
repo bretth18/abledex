@@ -1,3 +1,10 @@
+//
+//  AudioPreviewService.swift
+//  abledex
+//
+//  Created by Brett Henderson on 12/16/25.
+//
+
 import Foundation
 import AVFoundation
 
@@ -108,6 +115,13 @@ final class AudioPreviewService {
     nonisolated private func getAudioDuration(url: URL) -> TimeInterval? {
         let asset = AVURLAsset(url: url)
         let duration = asset.duration
+        guard duration.isValid && !duration.isIndefinite else { return nil }
+        return CMTimeGetSeconds(duration)
+    }
+    
+    private func getAudioDurationAsync(url: URL) async throws  -> TimeInterval? {
+        let asset = AVURLAsset(url: url)
+        let duration = try await asset.load(.duration)
         guard duration.isValid && !duration.isIndefinite else { return nil }
         return CMTimeGetSeconds(duration)
     }
