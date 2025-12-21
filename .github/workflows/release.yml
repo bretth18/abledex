@@ -19,7 +19,6 @@ jobs:
     - name: Archive App
       run: |
         xcodebuild -scheme abledex \
-          -xcconfig Configs/Secrets.xcconfig \
           -archivePath $PWD/build/abledex.xcarchive \
           -configuration Release \
           archive \
