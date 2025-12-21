@@ -1,3 +1,10 @@
+//
+//  AppDatabase.swift
+//  abledex
+//
+//  Created by Brett Henderson on 12/14/25.
+//
+
 import Foundation
 import GRDB
 
@@ -215,6 +222,16 @@ extension AppDatabase {
                 db,
                 sql: "SELECT DISTINCT sourceVolume FROM projects ORDER BY sourceVolume"
             )
+        }
+    }
+
+    func fetchProjects(byAlsFilePaths paths: [String]) async throws -> [String: ProjectRecord] {
+        guard !paths.isEmpty else { return [:] }
+        return try await dbWriter.read { db in
+            let records = try ProjectRecord
+                .filter(paths.contains(ProjectRecord.Columns.alsFilePath))
+                .fetchAll(db)
+            return Dictionary(uniqueKeysWithValues: records.map { ($0.alsFilePath, $0) })
         }
     }
 }

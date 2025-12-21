@@ -1,3 +1,10 @@
+//
+//  ProjectScanner.swift
+//  abledex
+//
+//  Created by Brett Henderson on 12/14/25.
+//
+
 import Foundation
 
 enum ScanProgress: Sendable {
@@ -54,6 +61,10 @@ final class ProjectScanner: Sendable {
             return 0
         }
 
+        // Fetch existing projects to preserve user metadata
+        let alsFilePaths = discoveredProjects.map { $0.alsFilePath.path }
+        let existingProjects = try await database.fetchProjects(byAlsFilePaths: alsFilePaths)
+
         // Parse in batches to avoid memory pressure
         var processed = 0
         let batchSize = 10
@@ -65,8 +76,9 @@ final class ProjectScanner: Sendable {
             // Parse batch concurrently
             let records = await withTaskGroup(of: ProjectRecord?.self) { group in
                 for discovered in batchProjects {
+                    let existing = existingProjects[discovered.alsFilePath.path]
                     group.addTask {
-                        self.parseProject(discovered)
+                        self.parseProject(discovered, existing: existing)
                     }
                 }
 
@@ -94,7 +106,7 @@ final class ProjectScanner: Sendable {
         return processed
     }
 
-    private nonisolated func parseProject(_ discovered: DiscoveredProject) -> ProjectRecord? {
+    private nonisolated func parseProject(_ discovered: DiscoveredProject, existing: ProjectRecord?) -> ProjectRecord? {
         do {
             let parsedData = try parser.parse(alsFilePath: discovered.alsFilePath)
 
@@ -103,8 +115,9 @@ final class ProjectScanner: Sendable {
             let pluginsJSON = (try? JSONEncoder().encode(parsedData.plugins))
                 .flatMap { String(data: $0, encoding: .utf8) }
 
+            // Preserve user metadata from existing record, or use defaults for new projects
             return ProjectRecord(
-                id: UUID(),
+                id: existing?.id ?? UUID(),
                 name: discovered.projectName,
                 folderPath: discovered.folderPath.path,
                 alsFilePath: discovered.alsFilePath.path,
@@ -126,11 +139,11 @@ final class ProjectScanner: Sendable {
                 pluginsJSON: pluginsJSON,
                 hasMissingSamples: false, // Don't check - too slow and unreliable
                 lastIndexedAt: Date(),
-                userTagsJSON: nil,
-                userNotes: nil,
-                completionStatus: .none,
-                isFavorite: false,
-                lastOpenedAt: nil
+                userTagsJSON: existing?.userTagsJSON,
+                userNotes: existing?.userNotes,
+                completionStatus: existing?.completionStatus ?? .none,
+                isFavorite: existing?.isFavorite ?? false,
+                lastOpenedAt: existing?.lastOpenedAt
             )
         } catch {
             print("Failed to parse \(discovered.projectName): \(error.localizedDescription)")

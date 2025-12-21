@@ -1,3 +1,10 @@
+//
+//  AppState.swift
+//  abledex
+//
+//  Created by Brett Henderson on 12/14/25.
+//
+
 import Foundation
 import SwiftUI
 
@@ -8,6 +15,7 @@ final class AppState {
 
     let database: AppDatabase
     let scanner: ProjectScanner
+    let audioPreview: AudioPreviewService
     private var volumeMonitor: VolumeMonitor?
 
     // MARK: - State
@@ -164,6 +172,7 @@ final class AppState {
     nonisolated init(database: AppDatabase) {
         self.database = database
         self.scanner = ProjectScanner(database: database)
+        self.audioPreview = AudioPreviewService()
     }
 
     // MARK: - Data Loading

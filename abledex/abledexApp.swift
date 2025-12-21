@@ -1,3 +1,10 @@
+//
+//  abledexApp.swift
+//  abledex
+//
+//  Created by Brett Henderson on 12/14/25.
+//
+
 import SwiftUI
 
 @main
@@ -26,6 +33,20 @@ struct AbledexApp: App {
                 }
         }
         .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates...") {
+                    Task {
+                        await UpdateService.shared.checkForUpdates()
+                        if UpdateService.shared.updateAvailable {
+                            showUpdateAlert()
+                        } else if UpdateService.shared.errorMessage == nil {
+                            showNoUpdateAlert()
+                        }
+                    }
+                }
+                .disabled(UpdateService.shared.isChecking)
+            }
+
             CommandGroup(after: .newItem) {
                 Button("Scan All Locations") {
                     Task {
@@ -71,5 +92,35 @@ struct AbledexApp: App {
                 try? await appState.addLocation(path: url.path)
             }
         }
+    }
+
+    private func showUpdateAlert() {
+        let updateService = UpdateService.shared
+        let alert = NSAlert()
+        alert.messageText = "Update Available"
+        alert.informativeText = "Version \(updateService.latestVersion ?? "unknown") is available. You are currently running version \(updateService.currentVersion)."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Download Update")
+        alert.addButton(withTitle: "View Release Notes")
+        alert.addButton(withTitle: "Later")
+
+        let response = alert.runModal()
+        switch response {
+        case .alertFirstButtonReturn:
+            updateService.downloadAndInstallUpdate()
+        case .alertSecondButtonReturn:
+            updateService.openReleasePage()
+        default:
+            break
+        }
+    }
+
+    private func showNoUpdateAlert() {
+        let alert = NSAlert()
+        alert.messageText = "You're Up to Date"
+        alert.informativeText = "Abledex \(UpdateService.shared.currentVersion) is currently the newest version available."
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
     }
 }
