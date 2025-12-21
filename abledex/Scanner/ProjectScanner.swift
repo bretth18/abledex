@@ -18,9 +18,8 @@ enum ScanProgress: Sendable {
 final class ProjectScanner: Sendable {
     private let database: AppDatabase
     private let crawler = FileSystemCrawler()
-    private let parser = ALSParser()
 
-    init(database: AppDatabase) {
+    nonisolated init(database: AppDatabase) {
         self.database = database
     }
 
@@ -108,7 +107,7 @@ final class ProjectScanner: Sendable {
 
     private nonisolated func parseProject(_ discovered: DiscoveredProject, existing: ProjectRecord?) -> ProjectRecord? {
         do {
-            let parsedData = try parser.parse(alsFilePath: discovered.alsFilePath)
+            let parsedData = try ALSParser().parse(alsFilePath: discovered.alsFilePath)
 
             let samplePathsJSON = (try? JSONEncoder().encode(parsedData.samplePaths))
                 .flatMap { String(data: $0, encoding: .utf8) }
