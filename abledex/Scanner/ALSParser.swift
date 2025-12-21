@@ -20,6 +20,32 @@ struct ParsedProjectData: Sendable {
     var duration: Double?
     var samplePaths: [String] = []
     var plugins: [String] = []
+
+    nonisolated init(
+        bpm: Double? = nil,
+        timeSignatureNumerator: Int? = nil,
+        timeSignatureDenominator: Int? = nil,
+        audioTrackCount: Int = 0,
+        midiTrackCount: Int = 0,
+        returnTrackCount: Int = 0,
+        abletonVersion: String? = nil,
+        abletonMinorVersion: String? = nil,
+        duration: Double? = nil,
+        samplePaths: [String] = [],
+        plugins: [String] = []
+    ) {
+        self.bpm = bpm
+        self.timeSignatureNumerator = timeSignatureNumerator
+        self.timeSignatureDenominator = timeSignatureDenominator
+        self.audioTrackCount = audioTrackCount
+        self.midiTrackCount = midiTrackCount
+        self.returnTrackCount = returnTrackCount
+        self.abletonVersion = abletonVersion
+        self.abletonMinorVersion = abletonMinorVersion
+        self.duration = duration
+        self.samplePaths = samplePaths
+        self.plugins = plugins
+    }
 }
 
 enum ALSParserError: Error, LocalizedError {
@@ -43,7 +69,9 @@ enum ALSParserError: Error, LocalizedError {
 }
 
 struct ALSParser: Sendable {
-    func parse(alsFilePath: URL) throws -> ParsedProjectData {
+    nonisolated init() {}
+
+    nonisolated func parse(alsFilePath: URL) throws -> ParsedProjectData {
         guard FileManager.default.fileExists(atPath: alsFilePath.path) else {
             throw ALSParserError.fileNotFound
         }
@@ -58,7 +86,7 @@ struct ALSParser: Sendable {
         return parseXML(xmlString)
     }
 
-    private func decompressGzip(data: Data) throws -> Data {
+    private nonisolated func decompressGzip(data: Data) throws -> Data {
         guard data.count > 10 else {
             throw ALSParserError.decompressionFailed
         }
@@ -124,7 +152,7 @@ struct ALSParser: Sendable {
         return Data(destinationBuffer.prefix(decompressedSize))
     }
 
-    private func parseXML(_ xmlString: String) -> ParsedProjectData {
+    private nonisolated func parseXML(_ xmlString: String) -> ParsedProjectData {
         var result = ParsedProjectData()
 
         // Parse Ableton version - look in first 2000 chars for efficiency
@@ -164,7 +192,7 @@ struct ALSParser: Sendable {
         return result
     }
 
-    private func extractBPM(from xmlString: String) -> Double? {
+    private nonisolated func extractBPM(from xmlString: String) -> Double? {
         // Find the Tempo block and extract the Manual value
         // The structure is: <Tempo>...<Manual Value="120" />...</Tempo>
         guard let tempoStart = xmlString.range(of: "<Tempo>"),
@@ -190,7 +218,7 @@ struct ALSParser: Sendable {
         return Double(tempoBlock[valueRange])
     }
 
-    private func extractFirstDouble(from string: String, pattern: String) -> Double? {
+    private nonisolated func extractFirstDouble(from string: String, pattern: String) -> Double? {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
             return nil
         }
@@ -203,7 +231,7 @@ struct ALSParser: Sendable {
         return Double(string[valueRange])
     }
 
-    private func extractFirstInt(from string: String, pattern: String) -> Int? {
+    private nonisolated func extractFirstInt(from string: String, pattern: String) -> Int? {
         guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
             return nil
         }
@@ -216,7 +244,7 @@ struct ALSParser: Sendable {
         return Int(string[valueRange])
     }
 
-    private func extractSampleNames(from xmlString: String) -> [String] {
+    private nonisolated func extractSampleNames(from xmlString: String) -> [String] {
         var names: Set<String> = []
 
         // Only look for sample file names, not full paths
@@ -237,7 +265,7 @@ struct ALSParser: Sendable {
         return Array(names).sorted()
     }
 
-    private func extractPlugins(from xmlString: String) -> [String] {
+    private nonisolated func extractPlugins(from xmlString: String) -> [String] {
         var plugins: Set<String> = []
 
         let pattern = #"<PlugName Value="([^"]+)""#
@@ -260,7 +288,7 @@ struct ALSParser: Sendable {
         return Array(plugins).sorted()
     }
 
-    private func isBuiltInDevice(_ name: String) -> Bool {
+    private nonisolated func isBuiltInDevice(_ name: String) -> Bool {
         let prefixes = ["Ableton", "Audio", "Auto", "Beat", "Corpus", "Delay", "Drum", "EQ", "External", "Filter", "Flanger", "Gate", "Glue", "Grain", "Limiter", "Looper", "MIDI", "Multiband", "Overdrive", "Pedal", "Phaser", "Pitch", "Redux", "Resonator", "Reverb", "Saturator", "Scale", "Simple", "Spectrum", "Tension", "Tuner", "Utility", "Vinyl", "Vocoder", "Wavetable"]
         return prefixes.contains { name.hasPrefix($0) }
     }
