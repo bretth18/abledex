@@ -12,6 +12,7 @@ instead of spending hours trying to remember what that really good half-finished
 built with swift and swiftUI, abledex provides a familiar interface for macOS users. 
 
 ## Screenshots
+<img width="1080" height="720" alt="Screenshot 2025-12-21 at 13 50 21" src="https://github.com/user-attachments/assets/1e2d0964-e2ff-4e80-85ba-c751f59713dc" />
 
 
 
