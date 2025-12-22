@@ -38,8 +38,10 @@ struct ContentView: View {
         } detail: {
             if let project = appState.selectedProject {
                 ProjectDetailView(project: project)
+                    .navigationSplitViewColumnWidth(min: 100, ideal: 180)
             } else {
                 ProjectDetailEmptyView()
+                    .navigationSplitViewColumnWidth(min: 40, ideal: 160, max: 200)
             }
         }
         .navigationSplitViewStyle(.balanced)
