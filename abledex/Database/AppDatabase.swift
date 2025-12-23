@@ -99,6 +99,13 @@ final class AppDatabase: Sendable {
             try db.create(index: "projects_on_fileHash", on: "projects", columns: ["fileHash"])
         }
 
+        migrator.registerMigration("v4") { db in
+            // Add color label column for project flagging
+            try db.alter(table: "projects") { t in
+                t.add(column: "colorLabel", .integer).notNull().defaults(to: 0)
+            }
+        }
+
         return migrator
     }
 }

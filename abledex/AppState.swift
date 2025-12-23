@@ -37,6 +37,7 @@ final class AppState {
     var selectedFilter: ProjectFilter = .all
     var selectedVolumeFilter: String?
     var selectedStatusFilter: CompletionStatus?
+    var selectedColorLabelFilter: ColorLabel?
     var selectedTagFilter: String?
     var selectedPluginFilter: String?
     var selectedKeyFilter: String?
@@ -89,6 +90,11 @@ final class AppState {
         // Apply status filter
         if let statusFilter = selectedStatusFilter {
             result = result.filter { $0.completionStatus == statusFilter }
+        }
+
+        // Apply color label filter
+        if let colorLabelFilter = selectedColorLabelFilter {
+            result = result.filter { $0.colorLabel == colorLabelFilter }
         }
 
         // Apply tag filter
@@ -461,6 +467,32 @@ final class AppState {
                 }
             }
         }
+    }
+
+    func updateProjectColorLabel(_ project: ProjectRecord, colorLabel: ColorLabel) async throws {
+        var updated = project
+        updated.colorLabel = colorLabel
+        try await database.saveProject(updated)
+
+        if let index = projects.firstIndex(where: { $0.id == project.id }) {
+            projects[index] = updated
+        }
+    }
+
+    func batchSetColorLabel(_ colorLabel: ColorLabel) async throws {
+        for id in selectedProjectIDs {
+            if var project = projects.first(where: { $0.id == id }) {
+                project.colorLabel = colorLabel
+                try await database.saveProject(project)
+                if let index = projects.firstIndex(where: { $0.id == id }) {
+                    projects[index] = project
+                }
+            }
+        }
+    }
+
+    func colorLabelCount(for label: ColorLabel) -> Int {
+        projects.filter { $0.colorLabel == label }.count
     }
 }
 

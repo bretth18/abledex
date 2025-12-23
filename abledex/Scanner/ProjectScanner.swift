@@ -149,6 +149,7 @@ final class ProjectScanner: Sendable {
                 userTagsJSON: existing?.userTagsJSON,
                 userNotes: existing?.userNotes,
                 completionStatus: existing?.completionStatus ?? .none,
+                colorLabel: existing?.colorLabel ?? .none,
                 isFavorite: existing?.isFavorite ?? false,
                 lastOpenedAt: existing?.lastOpenedAt
             )

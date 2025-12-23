@@ -46,6 +46,43 @@ enum CompletionStatus: Int, Codable, Sendable, CaseIterable {
     }
 }
 
+enum ColorLabel: Int, Codable, Sendable, CaseIterable {
+    case none = 0
+    case red = 1
+    case orange = 2
+    case yellow = 3
+    case green = 4
+    case blue = 5
+    case purple = 6
+    case gray = 7
+
+    var label: String {
+        switch self {
+        case .none: return "None"
+        case .red: return "Red"
+        case .orange: return "Orange"
+        case .yellow: return "Yellow"
+        case .green: return "Green"
+        case .blue: return "Blue"
+        case .purple: return "Purple"
+        case .gray: return "Gray"
+        }
+    }
+
+    var systemColor: String {
+        switch self {
+        case .none: return "clear"
+        case .red: return "red"
+        case .orange: return "orange"
+        case .yellow: return "yellow"
+        case .green: return "green"
+        case .blue: return "blue"
+        case .purple: return "purple"
+        case .gray: return "gray"
+        }
+    }
+}
+
 struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "projects"
 
@@ -96,6 +133,7 @@ struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, Persista
     var userTagsJSON: String?
     var userNotes: String?
     var completionStatus: CompletionStatus
+    var colorLabel: ColorLabel
     var isFavorite: Bool
     var lastOpenedAt: Date?
 
@@ -127,6 +165,7 @@ struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, Persista
         case userTagsJSON
         case userNotes
         case completionStatus
+        case colorLabel
         case isFavorite
         case lastOpenedAt
     }

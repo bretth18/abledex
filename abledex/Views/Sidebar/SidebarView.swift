@@ -16,6 +16,7 @@ struct SidebarView: View {
     @State private var isKeysExpanded = false
     @State private var isFoldersExpanded = false
     @State private var isTagsExpanded = true
+    @State private var isColorLabelsExpanded = true
     @State private var isVolumesExpanded = true
     @State private var isLocationsExpanded = true
 
@@ -23,7 +24,7 @@ struct SidebarView: View {
         @Bindable var state = appState
 
         List(selection: $state.selectedFilter) {
-            Text("abledex")
+            Text(appTitle)
                 .font(.largeTitle.bold())
                 .padding(.vertical, 4)
 
@@ -260,6 +261,42 @@ struct SidebarView: View {
                 }
             }
 
+            Section(isExpanded: $isColorLabelsExpanded) {
+                ForEach(ColorLabel.allCases.filter { $0 != .none }, id: \.self) { label in
+                    let count = appState.colorLabelCount(for: label)
+                    if count > 0 {
+                        Button {
+                            if appState.selectedColorLabelFilter == label {
+                                appState.selectedColorLabelFilter = nil
+                            } else {
+                                appState.selectedColorLabelFilter = label
+                            }
+                        } label: {
+                            Label {
+                                HStack {
+                                    Text(label.label)
+                                    Spacer()
+                                    Text("\(count)")
+                                        .foregroundStyle(.secondary)
+                                        .font(.caption)
+                                }
+                            } icon: {
+                                Image(systemName: "circle.fill")
+                                    .foregroundStyle(colorForLabel(label))
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(
+                            appState.selectedColorLabelFilter == label
+                                ? Color.accentColor.opacity(0.2)
+                                : Color.clear
+                        )
+                    }
+                }
+            } header: {
+                Text("Color Labels")
+            }
+
             if !appState.uniqueVolumes.isEmpty {
                 Section(isExpanded: $isVolumesExpanded) {
                     ForEach(appState.uniqueVolumes, id: \.self) { volume in
@@ -377,6 +414,7 @@ struct SidebarView: View {
 
     private var hasActiveFilters: Bool {
         appState.selectedStatusFilter != nil ||
+        appState.selectedColorLabelFilter != nil ||
         appState.selectedVolumeFilter != nil ||
         appState.selectedTagFilter != nil ||
         appState.selectedPluginFilter != nil ||
@@ -389,6 +427,7 @@ struct SidebarView: View {
 
     private func clearAllFilters() {
         appState.selectedStatusFilter = nil
+        appState.selectedColorLabelFilter = nil
         appState.selectedVolumeFilter = nil
         appState.selectedTagFilter = nil
         appState.selectedPluginFilter = nil
@@ -496,6 +535,14 @@ struct SidebarView: View {
         return key
     }
 
+    private var appTitle: String {
+        #if DEBUG
+        return "abledex (dev)"
+        #else
+        return "abledex"
+        #endif
+    }
+
     private func statusCount(for status: CompletionStatus) -> Int {
         appState.projects.filter { $0.completionStatus == status }.count
     }
@@ -507,6 +554,19 @@ struct SidebarView: View {
         case .inProgress: return .blue
         case .mixing: return .purple
         case .done: return .green
+        }
+    }
+
+    private func colorForLabel(_ label: ColorLabel) -> Color {
+        switch label {
+        case .none: return .clear
+        case .red: return .red
+        case .orange: return .orange
+        case .yellow: return .yellow
+        case .green: return .green
+        case .blue: return .blue
+        case .purple: return .purple
+        case .gray: return .gray
         }
     }
 

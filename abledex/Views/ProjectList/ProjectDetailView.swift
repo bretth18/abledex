@@ -30,6 +30,11 @@ struct ProjectDetailView: View {
 
                 Divider()
 
+                // Color label picker
+                colorLabelSection
+
+                Divider()
+
                 // Quick actions
                 actionsSection
 
@@ -336,6 +341,58 @@ struct ProjectDetailView: View {
         }
     }
 
+    private var colorLabelSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Color Label")
+                .font(.headline)
+
+            HStack(spacing: 8) {
+                ForEach(ColorLabel.allCases, id: \.self) { label in
+                    colorLabelButton(for: label)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func colorLabelButton(for label: ColorLabel) -> some View {
+        let isSelected = project.colorLabel == label
+        let color = colorForLabel(label)
+
+        Button {
+            Task {
+                try? await appState.updateProjectColorLabel(project, colorLabel: label)
+            }
+        } label: {
+            if label == .none {
+                Image(systemName: isSelected ? "circle.slash" : "circle.slash")
+                    .font(.title2)
+                    .foregroundStyle(isSelected ? .primary : .tertiary)
+            } else {
+                Image(systemName: isSelected ? "circle.fill" : "circle")
+                    .font(.title2)
+                    .foregroundStyle(color)
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(4)
+        .background(isSelected ? Color.gray.opacity(0.2) : Color.clear)
+        .clipShape(Circle())
+    }
+
+    private func colorForLabel(_ label: ColorLabel) -> Color {
+        switch label {
+        case .none: return .clear
+        case .red: return .red
+        case .orange: return .orange
+        case .yellow: return .yellow
+        case .green: return .green
+        case .blue: return .blue
+        case .purple: return .purple
+        case .gray: return .gray
+        }
+    }
+
     private var detailsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Details")
@@ -546,7 +603,8 @@ struct ProjectDetailView: View {
                         .foregroundStyle(.tertiary)
                 }
 
-                AudioScrubberView(
+                AsyncWaveformView(
+                    url: audio.url,
                     progress: isCurrentlyPlaying ? appState.audioPreview.playbackProgress : 0,
                     duration: audioDuration,
                     isActive: isCurrentlyPlaying,
