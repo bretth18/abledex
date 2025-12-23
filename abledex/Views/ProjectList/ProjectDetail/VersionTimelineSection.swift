@@ -23,6 +23,7 @@ struct VersionTimelineSection: View {
                     versionRow(version, index: index, isLast: index == versions.count - 1)
                 }
             }
+            .padding(.top, 4)
         } label: {
             HStack {
                 Text("Version History")

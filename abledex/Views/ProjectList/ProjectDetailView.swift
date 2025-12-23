@@ -343,7 +343,7 @@ struct ProjectDetailView: View {
 
     private var colorLabelSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Color Label")
+            Text("Color")
                 .font(.headline)
 
             HStack(spacing: 8) {

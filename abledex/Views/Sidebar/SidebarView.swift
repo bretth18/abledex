@@ -294,7 +294,7 @@ struct SidebarView: View {
                     }
                 }
             } header: {
-                Text("Color Labels")
+                Text("Colors")
             }
 
             if !appState.uniqueVolumes.isEmpty {
