@@ -16,6 +16,7 @@ final class AppState {
     let database: AppDatabase
     let scanner: ProjectScanner
     let audioPreview: AudioPreviewService
+    let duplicateService = DuplicateDetectionService()
     private var volumeMonitor: VolumeMonitor?
 
     // MARK: - State
@@ -36,9 +37,13 @@ final class AppState {
     var selectedFilter: ProjectFilter = .all
     var selectedVolumeFilter: String?
     var selectedStatusFilter: CompletionStatus?
+    var selectedColorLabelFilter: ColorLabel?
     var selectedTagFilter: String?
     var selectedPluginFilter: String?
+    var selectedKeyFilter: String?
+    var selectedFolderFilter: String?
     var showFavoritesOnly: Bool = false
+    var showDuplicatesOnly: Bool = false
 
     // MARK: - Computed Properties
 
@@ -87,6 +92,11 @@ final class AppState {
             result = result.filter { $0.completionStatus == statusFilter }
         }
 
+        // Apply color label filter
+        if let colorLabelFilter = selectedColorLabelFilter {
+            result = result.filter { $0.colorLabel == colorLabelFilter }
+        }
+
         // Apply tag filter
         if let tagFilter = selectedTagFilter {
             result = result.filter { $0.userTags.contains(tagFilter) }
@@ -97,9 +107,25 @@ final class AppState {
             result = result.filter { $0.plugins.contains(pluginFilter) }
         }
 
+        // Apply key filter
+        if let keyFilter = selectedKeyFilter {
+            result = result.filter { $0.musicalKeys.contains(keyFilter) }
+        }
+
+        // Apply folder filter
+        if let folderFilter = selectedFolderFilter {
+            result = result.filter { $0.projectFolderName == folderFilter }
+        }
+
         // Apply favorites filter
         if showFavoritesOnly {
             result = result.filter { $0.isFavorite }
+        }
+
+        // Apply duplicates filter
+        if showDuplicatesOnly {
+            let projectsWithDuplicates = Set(duplicateGroups.flatMap { $0.projects.map { $0.id } })
+            result = result.filter { projectsWithDuplicates.contains($0.id) }
         }
 
         // Apply sorting
@@ -151,6 +177,39 @@ final class AppState {
 
     var uniquePlugins: [String] {
         Array(Set(projects.flatMap { $0.plugins })).sorted()
+    }
+
+    var uniqueKeys: [String] {
+        Array(Set(projects.flatMap { $0.musicalKeys })).sorted()
+    }
+
+    var uniqueFolders: [String] {
+        Array(Set(projects.map { $0.projectFolderName })).sorted()
+    }
+
+    var projectsByFolder: [String: [ProjectRecord]] {
+        Dictionary(grouping: projects, by: { $0.projectFolderName })
+    }
+
+    func versionsInSameFolder(as project: ProjectRecord) -> [ProjectRecord] {
+        projects.filter { $0.folderPath == project.folderPath }
+            .sorted { ($0.modifiedDate ?? $0.filesystemModifiedDate) < ($1.modifiedDate ?? $1.filesystemModifiedDate) }
+    }
+
+    var duplicateGroups: [DuplicateGroup] {
+        duplicateService.findDuplicates(in: projects)
+    }
+
+    var duplicatesCount: Int {
+        Set(duplicateGroups.flatMap { $0.projects.map { $0.id } }).count
+    }
+
+    func hasDuplicates(_ project: ProjectRecord) -> Bool {
+        duplicateService.hasDuplicates(project, in: projects)
+    }
+
+    func duplicatesOf(_ project: ProjectRecord) -> [ProjectRecord] {
+        duplicateService.duplicatesOf(project, in: projects)
     }
 
     var projectCount: Int {
@@ -408,6 +467,32 @@ final class AppState {
                 }
             }
         }
+    }
+
+    func updateProjectColorLabel(_ project: ProjectRecord, colorLabel: ColorLabel) async throws {
+        var updated = project
+        updated.colorLabel = colorLabel
+        try await database.saveProject(updated)
+
+        if let index = projects.firstIndex(where: { $0.id == project.id }) {
+            projects[index] = updated
+        }
+    }
+
+    func batchSetColorLabel(_ colorLabel: ColorLabel) async throws {
+        for id in selectedProjectIDs {
+            if var project = projects.first(where: { $0.id == id }) {
+                project.colorLabel = colorLabel
+                try await database.saveProject(project)
+                if let index = projects.firstIndex(where: { $0.id == id }) {
+                    projects[index] = project
+                }
+            }
+        }
+    }
+
+    func colorLabelCount(for label: ColorLabel) -> Int {
+        projects.filter { $0.colorLabel == label }.count
     }
 }
 

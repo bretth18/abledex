@@ -10,59 +10,27 @@ import SwiftUI
 struct ProjectDetailView: View {
     let project: ProjectRecord
     @Environment(AppState.self) private var appState
+    @AppStorage("useCamelotNotation") private var useCamelotNotation = false
     @State private var editingNotes: String = ""
     @State private var newTag: String = ""
     @State private var showTagSuggestions: Bool = false
     @State private var isEditingNotes: Bool = false
     @State private var previewableAudio: [AudioPreviewService.PreviewableAudio] = []
+    @State private var sectionOrder: [DetailSection] = DetailOrderStorage.order
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                // Header
+                // Header (always first)
                 headerSection
 
-                Divider()
-
-                // Status picker
-                statusSection
-
-                Divider()
-
-                // Quick actions
-                actionsSection
-
-                Divider()
-
-                // Tags
-                tagsSection
-
-                Divider()
-
-                // Details
-                detailsSection
-
-                // Plugins
-                if !project.plugins.isEmpty {
-                    Divider()
-                    pluginsSection
+                // Dynamic sections based on stored order
+                ForEach(sectionOrder) { section in
+                    if shouldShowSection(section) {
+                        Divider()
+                        sectionView(for: section)
+                    }
                 }
-
-                // Audio Preview
-                if !previewableAudio.isEmpty {
-                    Divider()
-                    audioPreviewSection
-                }
-
-                // Samples
-                if !project.samplePaths.isEmpty {
-                    Divider()
-                    samplesSection
-                }
-
-                // Notes
-                Divider()
-                notesSection
             }
             .padding()
         }
@@ -79,6 +47,58 @@ struct ProjectDetailView: View {
         }
         .onDisappear {
             appState.audioPreview.stop()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+            sectionOrder = DetailOrderStorage.order
+        }
+    }
+
+    // MARK: - Section Visibility
+
+    private func shouldShowSection(_ section: DetailSection) -> Bool {
+        switch section {
+        case .status, .color, .actions, .tags, .details, .notes:
+            return true
+        case .plugins:
+            return !project.plugins.isEmpty
+        case .keys:
+            return !project.musicalKeys.isEmpty
+        case .audioPreview:
+            return !previewableAudio.isEmpty
+        case .samples:
+            return !project.samplePaths.isEmpty
+        case .versionTimeline:
+            return appState.versionsInSameFolder(as: project).count > 1
+        }
+    }
+
+    // MARK: - Section Router
+
+    @ViewBuilder
+    private func sectionView(for section: DetailSection) -> some View {
+        switch section {
+        case .status:
+            statusSection
+        case .color:
+            colorLabelSection
+        case .actions:
+            actionsSection
+        case .tags:
+            tagsSection
+        case .details:
+            detailsSection
+        case .plugins:
+            pluginsSection
+        case .keys:
+            keysSection
+        case .audioPreview:
+            audioPreviewSection
+        case .samples:
+            samplesSection
+        case .versionTimeline:
+            VersionTimelineSection(project: project)
+        case .notes:
+            notesSection
         }
     }
 
@@ -110,6 +130,10 @@ struct ProjectDetailView: View {
                         if project.hasMissingSamples {
                             Label("Missing samples", systemImage: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.orange)
+                        }
+                        if appState.hasDuplicates(project) {
+                            Label("Has duplicates", systemImage: "doc.on.doc")
+                                .foregroundStyle(.red)
                         }
                     }
                     .font(.caption)
@@ -319,6 +343,58 @@ struct ProjectDetailView: View {
         }
     }
 
+    private var colorLabelSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Color")
+                .font(.headline)
+
+            HStack(spacing: 8) {
+                ForEach(ColorLabel.allCases, id: \.self) { label in
+                    colorLabelButton(for: label)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func colorLabelButton(for label: ColorLabel) -> some View {
+        let isSelected = project.colorLabel == label
+        let color = colorForLabel(label)
+
+        Button {
+            Task {
+                try? await appState.updateProjectColorLabel(project, colorLabel: label)
+            }
+        } label: {
+            if label == .none {
+                Image(systemName: isSelected ? "circle.slash" : "circle.slash")
+                    .font(.title2)
+                    .foregroundStyle(isSelected ? .primary : .tertiary)
+            } else {
+                Image(systemName: isSelected ? "circle.fill" : "circle")
+                    .font(.title2)
+                    .foregroundStyle(color)
+            }
+        }
+        .buttonStyle(.plain)
+        .padding(4)
+        .background(isSelected ? Color.gray.opacity(0.2) : Color.clear)
+        .clipShape(Circle())
+    }
+
+    private func colorForLabel(_ label: ColorLabel) -> Color {
+        switch label {
+        case .none: return .clear
+        case .red: return .red
+        case .orange: return .orange
+        case .yellow: return .yellow
+        case .green: return .green
+        case .blue: return .blue
+        case .purple: return .purple
+        case .gray: return .gray
+        }
+    }
+
     private var detailsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Details")
@@ -401,6 +477,36 @@ struct ProjectDetailView: View {
                 }
             }
         }
+    }
+
+    private var keysSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Keys (\(project.musicalKeys.count))")
+                .font(.headline)
+
+            FlowLayout(spacing: 6) {
+                ForEach(project.musicalKeys, id: \.self) { key in
+                    HStack(spacing: 4) {
+                        Image(systemName: "music.note")
+                            .font(.caption2)
+                        Text(displayKey(key))
+                    }
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.pink.opacity(0.15))
+                    .foregroundStyle(.pink)
+                    .clipShape(Capsule())
+                }
+            }
+        }
+    }
+
+    private func displayKey(_ key: String) -> String {
+        if useCamelotNotation, let camelot = CamelotConverter.toCamelot(key) {
+            return camelot
+        }
+        return key
     }
 
     private var audioPreviewSection: some View {
@@ -499,7 +605,8 @@ struct ProjectDetailView: View {
                         .foregroundStyle(.tertiary)
                 }
 
-                AudioScrubberView(
+                AsyncWaveformView(
+                    url: audio.url,
                     progress: isCurrentlyPlaying ? appState.audioPreview.playbackProgress : 0,
                     duration: audioDuration,
                     isActive: isCurrentlyPlaying,

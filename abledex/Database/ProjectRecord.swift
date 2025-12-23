@@ -46,6 +46,43 @@ enum CompletionStatus: Int, Codable, Sendable, CaseIterable {
     }
 }
 
+enum ColorLabel: Int, Codable, Sendable, CaseIterable {
+    case none = 0
+    case red = 1
+    case orange = 2
+    case yellow = 3
+    case green = 4
+    case blue = 5
+    case purple = 6
+    case gray = 7
+
+    var label: String {
+        switch self {
+        case .none: return "None"
+        case .red: return "Red"
+        case .orange: return "Orange"
+        case .yellow: return "Yellow"
+        case .green: return "Green"
+        case .blue: return "Blue"
+        case .purple: return "Purple"
+        case .gray: return "Gray"
+        }
+    }
+
+    var systemColor: String {
+        switch self {
+        case .none: return "clear"
+        case .red: return "red"
+        case .orange: return "orange"
+        case .yellow: return "yellow"
+        case .green: return "green"
+        case .blue: return "blue"
+        case .purple: return "purple"
+        case .gray: return "gray"
+        }
+    }
+}
+
 struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "projects"
 
@@ -83,9 +120,11 @@ struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, Persista
     // JSON-encoded arrays
     var samplePathsJSON: String?
     var pluginsJSON: String?
+    var musicalKeysJSON: String?
 
     // Computed metadata
     var hasMissingSamples: Bool
+    var fileHash: String?
 
     // Indexing
     var lastIndexedAt: Date
@@ -94,6 +133,7 @@ struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, Persista
     var userTagsJSON: String?
     var userNotes: String?
     var completionStatus: CompletionStatus
+    var colorLabel: ColorLabel
     var isFavorite: Bool
     var lastOpenedAt: Date?
 
@@ -118,11 +158,14 @@ struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, Persista
         case duration
         case samplePathsJSON
         case pluginsJSON
+        case musicalKeysJSON
         case hasMissingSamples
+        case fileHash
         case lastIndexedAt
         case userTagsJSON
         case userNotes
         case completionStatus
+        case colorLabel
         case isFavorite
         case lastOpenedAt
     }
@@ -182,6 +225,23 @@ extension ProjectRecord {
         }
     }
 
+    var musicalKeys: [String] {
+        get {
+            guard let json = musicalKeysJSON,
+                  let data = json.data(using: .utf8),
+                  let keys = try? JSONDecoder().decode([String].self, from: data) else {
+                return []
+            }
+            return keys
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue),
+               let json = String(data: data, encoding: .utf8) {
+                musicalKeysJSON = json
+            }
+        }
+    }
+
     var timeSignature: String? {
         guard let num = timeSignatureNumerator, let denom = timeSignatureDenominator else {
             return nil
@@ -189,10 +249,86 @@ extension ProjectRecord {
         return "\(num)/\(denom)"
     }
 
+    var projectFolderName: String {
+        URL(fileURLWithPath: folderPath).lastPathComponent
+    }
+
     var formattedDuration: String? {
         guard let duration = duration else { return nil }
         let minutes = Int(duration) / 60
         let seconds = Int(duration) % 60
         return String(format: "%d:%02d", minutes, seconds)
+    }
+
+    /// Returns keys in Camelot notation (e.g., "8A" for A Minor)
+    var musicalKeysCamelot: [String] {
+        musicalKeys.compactMap { CamelotConverter.toCamelot($0) }
+    }
+}
+
+// MARK: - Camelot Notation Converter
+
+enum CamelotConverter {
+    // Camelot wheel mapping: key name -> Camelot code
+    private static let camelotMap: [String: String] = [
+        // Major keys (B column)
+        "C Major": "8B",
+        "C# Major": "3B",
+        "D Major": "10B",
+        "D# Major": "5B",
+        "E Major": "12B",
+        "F Major": "7B",
+        "F# Major": "2B",
+        "G Major": "9B",
+        "G# Major": "4B",
+        "A Major": "11B",
+        "A# Major": "6B",
+        "B Major": "1B",
+
+        // Minor keys (A column)
+        "C Minor": "5A",
+        "C# Minor": "12A",
+        "D Minor": "7A",
+        "D# Minor": "2A",
+        "E Minor": "9A",
+        "F Minor": "4A",
+        "F# Minor": "11A",
+        "G Minor": "6A",
+        "G# Minor": "1A",
+        "A Minor": "8A",
+        "A# Minor": "3A",
+        "B Minor": "10A",
+
+        // Common modes mapped to their relative position
+        "C Dorian": "6A",
+        "D Dorian": "8A",
+        "E Dorian": "10A",
+        "F Dorian": "11A",
+        "G Dorian": "1A",
+        "A Dorian": "3A",
+        "B Dorian": "5A",
+
+        "C Mixolydian": "7B",
+        "D Mixolydian": "9B",
+        "E Mixolydian": "11B",
+        "F Mixolydian": "12B",
+        "G Mixolydian": "2B",
+        "A Mixolydian": "4B",
+        "B Mixolydian": "6B",
+    ]
+
+    static func toCamelot(_ key: String) -> String? {
+        // Direct lookup first
+        if let camelot = camelotMap[key] {
+            return camelot
+        }
+
+        // Try to parse and find closest match for modes not in map
+        // Return nil for exotic scales that don't map well to Camelot
+        return nil
+    }
+
+    static func fromCamelot(_ code: String) -> String? {
+        camelotMap.first { $0.value == code }?.key
     }
 }

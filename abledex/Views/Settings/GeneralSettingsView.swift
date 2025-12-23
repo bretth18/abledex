@@ -11,6 +11,7 @@ struct GeneralSettingsView: View {
     @AppStorage("autoScanOnLaunch") private var autoScanOnLaunch = true
     @AppStorage("scanExternalVolumes") private var scanExternalVolumes = true
     @AppStorage("showMissingSamplesWarning") private var showMissingSamplesWarning = true
+    @AppStorage("useCamelotNotation") private var useCamelotNotation = false
 
     var body: some View {
         Form {
@@ -20,6 +21,15 @@ struct GeneralSettingsView: View {
                 Toggle("Show missing samples warnings", isOn: $showMissingSamplesWarning)
             } header: {
                 Text("Scanning")
+            }
+
+            Section {
+                Toggle("Use camelot notation for keys", isOn: $useCamelotNotation)
+                Text("Display musical keys as Camelot wheel codes (e.g., 8A for A Minor)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Display")
             }
 
             Section {

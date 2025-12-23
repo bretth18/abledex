@@ -6,6 +6,7 @@
 //
 
 import Foundation
+import CryptoKit
 
 enum ScanProgress: Sendable {
     case starting
@@ -113,6 +114,11 @@ final class ProjectScanner: Sendable {
                 .flatMap { String(data: $0, encoding: .utf8) }
             let pluginsJSON = (try? JSONEncoder().encode(parsedData.plugins))
                 .flatMap { String(data: $0, encoding: .utf8) }
+            let musicalKeysJSON = (try? JSONEncoder().encode(parsedData.musicalKeys))
+                .flatMap { String(data: $0, encoding: .utf8) }
+
+            // Calculate file hash for duplicate detection
+            let fileHash = calculateFileHash(url: discovered.alsFilePath)
 
             // Preserve user metadata from existing record, or use defaults for new projects
             return ProjectRecord(
@@ -136,11 +142,14 @@ final class ProjectScanner: Sendable {
                 duration: parsedData.duration,
                 samplePathsJSON: samplePathsJSON,
                 pluginsJSON: pluginsJSON,
+                musicalKeysJSON: musicalKeysJSON,
                 hasMissingSamples: false, // Don't check - too slow and unreliable
+                fileHash: fileHash,
                 lastIndexedAt: Date(),
                 userTagsJSON: existing?.userTagsJSON,
                 userNotes: existing?.userNotes,
                 completionStatus: existing?.completionStatus ?? .none,
+                colorLabel: existing?.colorLabel ?? .none,
                 isFavorite: existing?.isFavorite ?? false,
                 lastOpenedAt: existing?.lastOpenedAt
             )
@@ -148,5 +157,11 @@ final class ProjectScanner: Sendable {
             print("Failed to parse \(discovered.projectName): \(error.localizedDescription)")
             return nil
         }
+    }
+
+    private nonisolated func calculateFileHash(url: URL) -> String? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        let digest = Insecure.MD5.hash(data: data)
+        return digest.map { String(format: "%02hhx", $0) }.joined()
     }
 }

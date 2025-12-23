@@ -20,6 +20,7 @@ struct ParsedProjectData: Sendable {
     var duration: Double?
     var samplePaths: [String] = []
     var plugins: [String] = []
+    var musicalKeys: [String] = []
 
     nonisolated init(
         bpm: Double? = nil,
@@ -32,7 +33,8 @@ struct ParsedProjectData: Sendable {
         abletonMinorVersion: String? = nil,
         duration: Double? = nil,
         samplePaths: [String] = [],
-        plugins: [String] = []
+        plugins: [String] = [],
+        musicalKeys: [String] = []
     ) {
         self.bpm = bpm
         self.timeSignatureNumerator = timeSignatureNumerator
@@ -45,6 +47,7 @@ struct ParsedProjectData: Sendable {
         self.duration = duration
         self.samplePaths = samplePaths
         self.plugins = plugins
+        self.musicalKeys = musicalKeys
     }
 }
 
@@ -189,6 +192,9 @@ struct ALSParser: Sendable {
         // Extract sample count (not full paths to save memory)
         result.samplePaths = extractSampleNames(from: xmlString)
 
+        // Extract musical keys from scale information
+        result.musicalKeys = extractMusicalKeys(from: xmlString)
+
         return result
     }
 
@@ -291,5 +297,51 @@ struct ALSParser: Sendable {
     private nonisolated func isBuiltInDevice(_ name: String) -> Bool {
         let prefixes = ["Ableton", "Audio", "Auto", "Beat", "Corpus", "Delay", "Drum", "EQ", "External", "Filter", "Flanger", "Gate", "Glue", "Grain", "Limiter", "Looper", "MIDI", "Multiband", "Overdrive", "Pedal", "Phaser", "Pitch", "Redux", "Resonator", "Reverb", "Saturator", "Scale", "Simple", "Spectrum", "Tension", "Tuner", "Utility", "Vinyl", "Vocoder", "Wavetable"]
         return prefixes.contains { name.hasPrefix($0) }
+    }
+
+    private nonisolated func extractMusicalKeys(from xmlString: String) -> [String] {
+        var keys: Set<String> = []
+
+        // Pattern to match ScaleInformation blocks with Root and Name values
+        // Structure: <ScaleInformation><Root Value="X" /><Name Value="Y" /></ScaleInformation>
+        let pattern = #"<ScaleInformation>\s*<Root Value="(\d+)"\s*/>\s*<Name Value="(\d+)""#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
+            return []
+        }
+
+        let range = NSRange(xmlString.startIndex..., in: xmlString)
+        let matches = regex.matches(in: xmlString, options: [], range: range)
+
+        for match in matches.prefix(100) { // Limit to avoid performance issues
+            guard match.numberOfRanges >= 3,
+                  let rootRange = Range(match.range(at: 1), in: xmlString),
+                  let nameRange = Range(match.range(at: 2), in: xmlString),
+                  let root = Int(xmlString[rootRange]),
+                  let scaleName = Int(xmlString[nameRange]) else {
+                continue
+            }
+
+            if let keyString = formatMusicalKey(root: root, scaleName: scaleName) {
+                keys.insert(keyString)
+            }
+        }
+
+        return Array(keys).sorted()
+    }
+
+    private nonisolated func formatMusicalKey(root: Int, scaleName: Int) -> String? {
+        let noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+        let scaleNames = [
+            "Major", "Minor", "Dorian", "Mixolydian", "Lydian", "Phrygian", "Locrian",
+            "Whole Tone", "Half-Whole Dim", "Whole-Half Dim", "Minor Blues",
+            "Minor Pentatonic", "Major Pentatonic", "Harmonic Minor", "Melodic Minor",
+            "Super Locrian", "Bhairav", "Hungarian Minor", "Minor Gypsy", "Hirajoshi",
+            "In-Sen", "Iwato", "Kumoi", "Pelog", "Spanish"
+        ]
+
+        guard root >= 0 && root < noteNames.count else { return nil }
+        guard scaleName >= 0 && scaleName < scaleNames.count else { return nil }
+
+        return "\(noteNames[root]) \(scaleNames[scaleName])"
     }
 }
