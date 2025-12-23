@@ -9,6 +9,7 @@ import SwiftUI
 
 struct SidebarView: View {
     @Environment(AppState.self) private var appState
+    @AppStorage("useCamelotNotation") private var useCamelotNotation = false
     @State private var isLibraryExpanded = true
     @State private var isStatusExpanded = true
     @State private var isPluginsExpanded = false
@@ -159,7 +160,7 @@ struct SidebarView: View {
                         } label: {
                             Label {
                                 HStack {
-                                    Text(key)
+                                    Text(displayKey(key))
                                         .lineLimit(1)
                                     Spacer()
                                     Text("\(keyCount(for: key))")
@@ -486,6 +487,13 @@ struct SidebarView: View {
 
     private func folderCount(for folder: String) -> Int {
         appState.projectsByFolder[folder]?.count ?? 0
+    }
+
+    private func displayKey(_ key: String) -> String {
+        if useCamelotNotation, let camelot = CamelotConverter.toCamelot(key) {
+            return camelot
+        }
+        return key
     }
 
     private func statusCount(for status: CompletionStatus) -> Int {

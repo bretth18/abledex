@@ -220,4 +220,76 @@ extension ProjectRecord {
         let seconds = Int(duration) % 60
         return String(format: "%d:%02d", minutes, seconds)
     }
+
+    /// Returns keys in Camelot notation (e.g., "8A" for A Minor)
+    var musicalKeysCamelot: [String] {
+        musicalKeys.compactMap { CamelotConverter.toCamelot($0) }
+    }
+}
+
+// MARK: - Camelot Notation Converter
+
+enum CamelotConverter {
+    // Camelot wheel mapping: key name -> Camelot code
+    private static let camelotMap: [String: String] = [
+        // Major keys (B column)
+        "C Major": "8B",
+        "C# Major": "3B",
+        "D Major": "10B",
+        "D# Major": "5B",
+        "E Major": "12B",
+        "F Major": "7B",
+        "F# Major": "2B",
+        "G Major": "9B",
+        "G# Major": "4B",
+        "A Major": "11B",
+        "A# Major": "6B",
+        "B Major": "1B",
+
+        // Minor keys (A column)
+        "C Minor": "5A",
+        "C# Minor": "12A",
+        "D Minor": "7A",
+        "D# Minor": "2A",
+        "E Minor": "9A",
+        "F Minor": "4A",
+        "F# Minor": "11A",
+        "G Minor": "6A",
+        "G# Minor": "1A",
+        "A Minor": "8A",
+        "A# Minor": "3A",
+        "B Minor": "10A",
+
+        // Common modes mapped to their relative position
+        "C Dorian": "6A",
+        "D Dorian": "8A",
+        "E Dorian": "10A",
+        "F Dorian": "11A",
+        "G Dorian": "1A",
+        "A Dorian": "3A",
+        "B Dorian": "5A",
+
+        "C Mixolydian": "7B",
+        "D Mixolydian": "9B",
+        "E Mixolydian": "11B",
+        "F Mixolydian": "12B",
+        "G Mixolydian": "2B",
+        "A Mixolydian": "4B",
+        "B Mixolydian": "6B",
+    ]
+
+    static func toCamelot(_ key: String) -> String? {
+        // Direct lookup first
+        if let camelot = camelotMap[key] {
+            return camelot
+        }
+
+        // Try to parse and find closest match for modes not in map
+        // Return nil for exotic scales that don't map well to Camelot
+        return nil
+    }
+
+    static func fromCamelot(_ code: String) -> String? {
+        camelotMap.first { $0.value == code }?.key
+    }
 }

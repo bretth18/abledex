@@ -10,6 +10,7 @@ import SwiftUI
 struct ProjectDetailView: View {
     let project: ProjectRecord
     @Environment(AppState.self) private var appState
+    @AppStorage("useCamelotNotation") private var useCamelotNotation = false
     @State private var editingNotes: String = ""
     @State private var newTag: String = ""
     @State private var showTagSuggestions: Bool = false
@@ -429,7 +430,7 @@ struct ProjectDetailView: View {
                     HStack(spacing: 4) {
                         Image(systemName: "music.note")
                             .font(.caption2)
-                        Text(key)
+                        Text(displayKey(key))
                     }
                     .font(.caption)
                     .padding(.horizontal, 8)
@@ -440,6 +441,13 @@ struct ProjectDetailView: View {
                 }
             }
         }
+    }
+
+    private func displayKey(_ key: String) -> String {
+        if useCamelotNotation, let camelot = CamelotConverter.toCamelot(key) {
+            return camelot
+        }
+        return key
     }
 
     private var audioPreviewSection: some View {

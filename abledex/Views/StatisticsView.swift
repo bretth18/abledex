@@ -10,14 +10,29 @@ import Charts
 
 struct StatisticsView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 // Header
-                Text("Stats")
-                    .font(.largeTitle.bold())
-                    .padding(.bottom, 8)
+                
+                HStack (alignment: .firstTextBaseline) {
+                    Text("Stats")
+                        .font(.largeTitle.bold())
+                        .padding(.bottom, 8)
+                    
+                    Spacer()
+                    
+                    Button {
+                        dismiss()
+                    } label: {
+                        Label("Close", systemImage: "xmark.circle.fill")
+                            .labelStyle(.iconOnly)
+                    }
+                    .buttonStyle(.accessoryBar)
+
+                }
 
                 // Overview cards
                 LazyVGrid(columns: [
@@ -159,6 +174,7 @@ struct StatisticsView: View {
             .padding()
         }
         .frame(minWidth: 600, minHeight: 500)
+
     }
 
     // MARK: - Computed Stats
