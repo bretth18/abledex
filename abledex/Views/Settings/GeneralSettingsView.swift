@@ -24,7 +24,7 @@ struct GeneralSettingsView: View {
             }
 
             Section {
-                Toggle("Use Camelot notation for keys", isOn: $useCamelotNotation)
+                Toggle("Use camelot notation for keys", isOn: $useCamelotNotation)
                 Text("Display musical keys as Camelot wheel codes (e.g., 8A for A Minor)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
