@@ -48,6 +48,12 @@ struct ProjectDetailView: View {
                     pluginsSection
                 }
 
+                // Musical Keys
+                if !project.musicalKeys.isEmpty {
+                    Divider()
+                    keysSection
+                }
+
                 // Audio Preview
                 if !previewableAudio.isEmpty {
                     Divider()
@@ -58,6 +64,12 @@ struct ProjectDetailView: View {
                 if !project.samplePaths.isEmpty {
                     Divider()
                     samplesSection
+                }
+
+                // Version Timeline
+                if appState.versionsInSameFolder(as: project).count > 1 {
+                    Divider()
+                    VersionTimelineSection(project: project)
                 }
 
                 // Notes
@@ -110,6 +122,10 @@ struct ProjectDetailView: View {
                         if project.hasMissingSamples {
                             Label("Missing samples", systemImage: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.orange)
+                        }
+                        if appState.hasDuplicates(project) {
+                            Label("Has duplicates", systemImage: "doc.on.doc")
+                                .foregroundStyle(.red)
                         }
                     }
                     .font(.caption)
@@ -398,6 +414,29 @@ struct ProjectDetailView: View {
                         .padding(.vertical, 4)
                         .background(.quaternary)
                         .clipShape(Capsule())
+                }
+            }
+        }
+    }
+
+    private var keysSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Keys (\(project.musicalKeys.count))")
+                .font(.headline)
+
+            FlowLayout(spacing: 6) {
+                ForEach(project.musicalKeys, id: \.self) { key in
+                    HStack(spacing: 4) {
+                        Image(systemName: "music.note")
+                            .font(.caption2)
+                        Text(key)
+                    }
+                    .font(.caption)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(.pink.opacity(0.15))
+                    .foregroundStyle(.pink)
+                    .clipShape(Capsule())
                 }
             }
         }

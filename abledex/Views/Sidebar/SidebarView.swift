@@ -12,6 +12,8 @@ struct SidebarView: View {
     @State private var isLibraryExpanded = true
     @State private var isStatusExpanded = true
     @State private var isPluginsExpanded = false
+    @State private var isKeysExpanded = false
+    @State private var isFoldersExpanded = false
     @State private var isTagsExpanded = true
     @State private var isVolumesExpanded = true
     @State private var isLocationsExpanded = true
@@ -40,6 +42,32 @@ struct SidebarView: View {
                         filterIcon(for: filter)
                     }
                     .tag(filter)
+                }
+
+                // Duplicates filter
+                if appState.duplicatesCount > 0 {
+                    Button {
+                        appState.showDuplicatesOnly.toggle()
+                    } label: {
+                        Label {
+                            HStack {
+                                Text("Duplicates")
+                                Spacer()
+                                Text("\(appState.duplicatesCount)")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            }
+                        } icon: {
+                            Image(systemName: "doc.on.doc")
+                                .foregroundStyle(.red)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(
+                        appState.showDuplicatesOnly
+                            ? Color.accentColor.opacity(0.2)
+                            : Color.clear
+                    )
                 }
             } header: {
                 Text("Library")
@@ -116,6 +144,83 @@ struct SidebarView: View {
                     }
                 } header: {
                     Text("Plugins")
+                }
+            }
+
+            if !appState.uniqueKeys.isEmpty {
+                Section(isExpanded: $isKeysExpanded) {
+                    ForEach(appState.uniqueKeys, id: \.self) { key in
+                        Button {
+                            if appState.selectedKeyFilter == key {
+                                appState.selectedKeyFilter = nil
+                            } else {
+                                appState.selectedKeyFilter = key
+                            }
+                        } label: {
+                            Label {
+                                HStack {
+                                    Text(key)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text("\(keyCount(for: key))")
+                                        .foregroundStyle(.secondary)
+                                        .font(.caption)
+                                }
+                            } icon: {
+                                Image(systemName: "music.note")
+                                    .foregroundStyle(.pink)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(
+                            appState.selectedKeyFilter == key
+                                ? Color.accentColor.opacity(0.2)
+                                : Color.clear
+                        )
+                    }
+                } header: {
+                    Text("Keys")
+                }
+            }
+
+            if !appState.uniqueFolders.isEmpty {
+                Section(isExpanded: $isFoldersExpanded) {
+                    ForEach(foldersWithMultipleVersions.prefix(20), id: \.self) { folder in
+                        Button {
+                            if appState.selectedFolderFilter == folder {
+                                appState.selectedFolderFilter = nil
+                            } else {
+                                appState.selectedFolderFilter = folder
+                            }
+                        } label: {
+                            Label {
+                                HStack {
+                                    Text(folder)
+                                        .lineLimit(1)
+                                    Spacer()
+                                    Text("\(folderCount(for: folder))")
+                                        .foregroundStyle(.secondary)
+                                        .font(.caption)
+                                }
+                            } icon: {
+                                Image(systemName: "folder")
+                                    .foregroundStyle(.cyan)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                        .listRowBackground(
+                            appState.selectedFolderFilter == folder
+                                ? Color.accentColor.opacity(0.2)
+                                : Color.clear
+                        )
+                    }
+                    if foldersWithMultipleVersions.count > 20 {
+                        Text("+ \(foldersWithMultipleVersions.count - 20) more...")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text("Project Folders")
                 }
             }
 
@@ -274,7 +379,10 @@ struct SidebarView: View {
         appState.selectedVolumeFilter != nil ||
         appState.selectedTagFilter != nil ||
         appState.selectedPluginFilter != nil ||
+        appState.selectedKeyFilter != nil ||
+        appState.selectedFolderFilter != nil ||
         appState.showFavoritesOnly ||
+        appState.showDuplicatesOnly ||
         appState.selectedFilter != .all
     }
 
@@ -283,8 +391,18 @@ struct SidebarView: View {
         appState.selectedVolumeFilter = nil
         appState.selectedTagFilter = nil
         appState.selectedPluginFilter = nil
+        appState.selectedKeyFilter = nil
+        appState.selectedFolderFilter = nil
         appState.showFavoritesOnly = false
+        appState.showDuplicatesOnly = false
         appState.selectedFilter = .all
+    }
+
+    private var foldersWithMultipleVersions: [String] {
+        appState.projectsByFolder
+            .filter { $0.value.count > 1 }
+            .keys
+            .sorted()
     }
 
     @ViewBuilder
@@ -360,6 +478,14 @@ struct SidebarView: View {
 
     private func pluginCount(for plugin: String) -> Int {
         appState.projects.filter { $0.plugins.contains(plugin) }.count
+    }
+
+    private func keyCount(for key: String) -> Int {
+        appState.projects.filter { $0.musicalKeys.contains(key) }.count
+    }
+
+    private func folderCount(for folder: String) -> Int {
+        appState.projectsByFolder[folder]?.count ?? 0
     }
 
     private func statusCount(for status: CompletionStatus) -> Int {

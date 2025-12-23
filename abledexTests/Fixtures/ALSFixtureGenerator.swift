@@ -16,6 +16,7 @@ struct ALSFixtureGenerator {
         var arrangementLength: Double = 960.0 // in beats
         var plugins: [String] = []
         var sampleNames: [String] = []
+        var scales: [(root: Int, name: Int)] = [] // Root: 0-11 (C-B), Name: 0=Major, 1=Minor, etc.
 
         static let minimal = ProjectConfig()
 
@@ -29,7 +30,8 @@ struct ALSFixtureGenerator {
             returnTrackCount: 4,
             arrangementLength: 3840.0,
             plugins: ["Serum", "FabFilter Pro-Q 3", "Valhalla Room"],
-            sampleNames: ["kick.wav", "snare.wav", "hihat.aif", "bass_loop.mp3"]
+            sampleNames: ["kick.wav", "snare.wav", "hihat.aif", "bass_loop.mp3"],
+            scales: [(root: 0, name: 0), (root: 9, name: 1)] // C Major, A Minor
         )
 
         static let oddTimeSignature = ProjectConfig(
@@ -151,6 +153,29 @@ struct ALSFixtureGenerator {
             xml += """
 
             </SampleRefs>
+            """
+        }
+
+        // Add scale information (per-clip scale settings)
+        if !config.scales.isEmpty {
+            xml += """
+
+            <Clips>
+            """
+            for scale in config.scales {
+                xml += """
+
+                <MidiClip>
+                    <ScaleInformation>
+                        <Root Value="\(scale.root)" />
+                        <Name Value="\(scale.name)" />
+                    </ScaleInformation>
+                </MidiClip>
+                """
+            }
+            xml += """
+
+            </Clips>
             """
         }
 

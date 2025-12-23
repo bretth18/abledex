@@ -83,9 +83,11 @@ struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, Persista
     // JSON-encoded arrays
     var samplePathsJSON: String?
     var pluginsJSON: String?
+    var musicalKeysJSON: String?
 
     // Computed metadata
     var hasMissingSamples: Bool
+    var fileHash: String?
 
     // Indexing
     var lastIndexedAt: Date
@@ -118,7 +120,9 @@ struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, Persista
         case duration
         case samplePathsJSON
         case pluginsJSON
+        case musicalKeysJSON
         case hasMissingSamples
+        case fileHash
         case lastIndexedAt
         case userTagsJSON
         case userNotes
@@ -182,11 +186,32 @@ extension ProjectRecord {
         }
     }
 
+    var musicalKeys: [String] {
+        get {
+            guard let json = musicalKeysJSON,
+                  let data = json.data(using: .utf8),
+                  let keys = try? JSONDecoder().decode([String].self, from: data) else {
+                return []
+            }
+            return keys
+        }
+        set {
+            if let data = try? JSONEncoder().encode(newValue),
+               let json = String(data: data, encoding: .utf8) {
+                musicalKeysJSON = json
+            }
+        }
+    }
+
     var timeSignature: String? {
         guard let num = timeSignatureNumerator, let denom = timeSignatureDenominator else {
             return nil
         }
         return "\(num)/\(denom)"
+    }
+
+    var projectFolderName: String {
+        URL(fileURLWithPath: folderPath).lastPathComponent
     }
 
     var formattedDuration: String? {

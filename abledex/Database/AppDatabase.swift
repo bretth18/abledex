@@ -84,6 +84,21 @@ final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v2") { db in
+            // Add musical keys column for key/scale detection
+            try db.alter(table: "projects") { t in
+                t.add(column: "musicalKeysJSON", .text)
+            }
+        }
+
+        migrator.registerMigration("v3") { db in
+            // Add file hash column for duplicate detection
+            try db.alter(table: "projects") { t in
+                t.add(column: "fileHash", .text)
+            }
+            try db.create(index: "projects_on_fileHash", on: "projects", columns: ["fileHash"])
+        }
+
         return migrator
     }
 }

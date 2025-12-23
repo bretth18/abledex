@@ -286,4 +286,80 @@ struct ALSParserTests {
 
         #expect(result.abletonVersion == version)
     }
+
+    // MARK: - Musical Key Parsing Tests
+
+    @Test("Parses musical keys from complex project")
+    func parseMusicalKeys() throws {
+        let fileURL = tempDirectory.appendingPathComponent("keys.als")
+        try ALSFixtureGenerator.writeALSFile(to: fileURL, config: .complex)
+
+        let result = try parser.parse(alsFilePath: fileURL)
+
+        #expect(result.musicalKeys.contains("C Major"))
+        #expect(result.musicalKeys.contains("A Minor"))
+        #expect(result.musicalKeys.count == 2)
+    }
+
+    @Test("Returns empty array when no scales present")
+    func parseNoScales() throws {
+        let fileURL = tempDirectory.appendingPathComponent("no_scales.als")
+        try ALSFixtureGenerator.writeALSFile(to: fileURL, config: .minimal)
+
+        let result = try parser.parse(alsFilePath: fileURL)
+
+        #expect(result.musicalKeys.isEmpty)
+    }
+
+    @Test("Parses all note roots correctly", arguments: [
+        (0, "C"), (1, "C#"), (2, "D"), (3, "D#"), (4, "E"), (5, "F"),
+        (6, "F#"), (7, "G"), (8, "G#"), (9, "A"), (10, "A#"), (11, "B")
+    ])
+    func parseNoteRoots(root: Int, expectedNote: String) throws {
+        var config = ALSFixtureGenerator.ProjectConfig.minimal
+        config.scales = [(root: root, name: 0)] // Major scale
+
+        let fileURL = tempDirectory.appendingPathComponent("root_\(root).als")
+        try ALSFixtureGenerator.writeALSFile(to: fileURL, config: config)
+
+        let result = try parser.parse(alsFilePath: fileURL)
+
+        #expect(result.musicalKeys.count == 1)
+        #expect(result.musicalKeys.first == "\(expectedNote) Major")
+    }
+
+    @Test("Parses scale types correctly", arguments: [
+        (0, "Major"), (1, "Minor"), (2, "Dorian"), (3, "Mixolydian")
+    ])
+    func parseScaleTypes(scaleType: Int, expectedName: String) throws {
+        var config = ALSFixtureGenerator.ProjectConfig.minimal
+        config.scales = [(root: 0, name: scaleType)] // C + scale
+
+        let fileURL = tempDirectory.appendingPathComponent("scale_\(scaleType).als")
+        try ALSFixtureGenerator.writeALSFile(to: fileURL, config: config)
+
+        let result = try parser.parse(alsFilePath: fileURL)
+
+        #expect(result.musicalKeys.count == 1)
+        #expect(result.musicalKeys.first == "C \(expectedName)")
+    }
+
+    @Test("Deduplicates identical scales")
+    func deduplicatesScales() throws {
+        var config = ALSFixtureGenerator.ProjectConfig.minimal
+        config.scales = [
+            (root: 0, name: 0), // C Major
+            (root: 0, name: 0), // C Major (duplicate)
+            (root: 9, name: 1)  // A Minor
+        ]
+
+        let fileURL = tempDirectory.appendingPathComponent("dedup.als")
+        try ALSFixtureGenerator.writeALSFile(to: fileURL, config: config)
+
+        let result = try parser.parse(alsFilePath: fileURL)
+
+        #expect(result.musicalKeys.count == 2) // Only 2 unique keys
+        #expect(result.musicalKeys.contains("C Major"))
+        #expect(result.musicalKeys.contains("A Minor"))
+    }
 }
