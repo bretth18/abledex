@@ -16,71 +16,21 @@ struct ProjectDetailView: View {
     @State private var showTagSuggestions: Bool = false
     @State private var isEditingNotes: Bool = false
     @State private var previewableAudio: [AudioPreviewService.PreviewableAudio] = []
+    @State private var sectionOrder: [DetailSection] = DetailOrderStorage.order
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                // Header
+                // Header (always first)
                 headerSection
 
-                Divider()
-
-                // Status picker
-                statusSection
-
-                Divider()
-
-                // Color label picker
-                colorLabelSection
-
-                Divider()
-
-                // Quick actions
-                actionsSection
-
-                Divider()
-
-                // Tags
-                tagsSection
-
-                Divider()
-
-                // Details
-                detailsSection
-
-                // Plugins
-                if !project.plugins.isEmpty {
-                    Divider()
-                    pluginsSection
+                // Dynamic sections based on stored order
+                ForEach(sectionOrder) { section in
+                    if shouldShowSection(section) {
+                        Divider()
+                        sectionView(for: section)
+                    }
                 }
-
-                // Musical Keys
-                if !project.musicalKeys.isEmpty {
-                    Divider()
-                    keysSection
-                }
-
-                // Audio Preview
-                if !previewableAudio.isEmpty {
-                    Divider()
-                    audioPreviewSection
-                }
-
-                // Samples
-                if !project.samplePaths.isEmpty {
-                    Divider()
-                    samplesSection
-                }
-
-                // Version Timeline
-                if appState.versionsInSameFolder(as: project).count > 1 {
-                    Divider()
-                    VersionTimelineSection(project: project)
-                }
-
-                // Notes
-                Divider()
-                notesSection
             }
             .padding()
         }
@@ -97,6 +47,58 @@ struct ProjectDetailView: View {
         }
         .onDisappear {
             appState.audioPreview.stop()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+            sectionOrder = DetailOrderStorage.order
+        }
+    }
+
+    // MARK: - Section Visibility
+
+    private func shouldShowSection(_ section: DetailSection) -> Bool {
+        switch section {
+        case .status, .color, .actions, .tags, .details, .notes:
+            return true
+        case .plugins:
+            return !project.plugins.isEmpty
+        case .keys:
+            return !project.musicalKeys.isEmpty
+        case .audioPreview:
+            return !previewableAudio.isEmpty
+        case .samples:
+            return !project.samplePaths.isEmpty
+        case .versionTimeline:
+            return appState.versionsInSameFolder(as: project).count > 1
+        }
+    }
+
+    // MARK: - Section Router
+
+    @ViewBuilder
+    private func sectionView(for section: DetailSection) -> some View {
+        switch section {
+        case .status:
+            statusSection
+        case .color:
+            colorLabelSection
+        case .actions:
+            actionsSection
+        case .tags:
+            tagsSection
+        case .details:
+            detailsSection
+        case .plugins:
+            pluginsSection
+        case .keys:
+            keysSection
+        case .audioPreview:
+            audioPreviewSection
+        case .samples:
+            samplesSection
+        case .versionTimeline:
+            VersionTimelineSection(project: project)
+        case .notes:
+            notesSection
         }
     }
 

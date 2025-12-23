@@ -17,6 +17,11 @@ struct SettingsView: View {
                     Label("General", systemImage: "gear")
                 }
 
+            LayoutSettingsView()
+                .tabItem {
+                    Label("Layout", systemImage: "rectangle.3.group")
+                }
+
             LocationsSettingsView()
                 .environment(appState)
                 .tabItem {
@@ -32,6 +37,6 @@ struct SettingsView: View {
                     Label("About", systemImage: "info.circle")
                 }
         }
-        .frame(width: 500, height: 400)
+        .frame(width: 500, height: 450)
     }
 }

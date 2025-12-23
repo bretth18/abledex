@@ -11,14 +11,8 @@ struct SidebarView: View {
     @Environment(AppState.self) private var appState
     @AppStorage("useCamelotNotation") private var useCamelotNotation = false
     @State private var isLibraryExpanded = true
-    @State private var isStatusExpanded = true
-    @State private var isPluginsExpanded = false
-    @State private var isKeysExpanded = false
-    @State private var isFoldersExpanded = false
-    @State private var isTagsExpanded = true
-    @State private var isColorLabelsExpanded = true
-    @State private var isVolumesExpanded = true
-    @State private var isLocationsExpanded = true
+    @State private var expandedSections: Set<SidebarSection> = [.status, .tags, .colors, .locations]
+    @State private var sectionOrder: [SidebarSection] = SidebarOrderStorage.order
 
     var body: some View {
         @Bindable var state = appState
@@ -28,389 +22,493 @@ struct SidebarView: View {
                 .font(.largeTitle.bold())
                 .padding(.vertical, 4)
 
-            Section(isExpanded: $isLibraryExpanded) {
-                ForEach(ProjectFilter.allCases, id: \.self) { filter in
-                    Label {
-                        HStack {
-                            Text(filter.rawValue)
-                            Spacer()
-                            if filter == .all {
-                                Text("\(appState.projectCount)")
-                                    .foregroundStyle(.secondary)
-                                    .font(.caption)
-                            }
-                        }
-                    } icon: {
-                        filterIcon(for: filter)
-                    }
-                    .tag(filter)
-                }
+            // Library section (always first)
+            librarySection
 
-                // Duplicates filter
-                if appState.duplicatesCount > 0 {
-                    Button {
-                        appState.showDuplicatesOnly.toggle()
-                    } label: {
-                        Label {
-                            HStack {
-                                Text("Duplicates")
-                                Spacer()
-                                Text("\(appState.duplicatesCount)")
-                                    .foregroundStyle(.secondary)
-                                    .font(.caption)
-                            }
-                        } icon: {
-                            Image(systemName: "doc.on.doc")
-                                .foregroundStyle(.red)
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .listRowBackground(
-                        appState.showDuplicatesOnly
-                            ? Color.accentColor.opacity(0.2)
-                            : Color.clear
-                    )
-                }
-            } header: {
-                Text("Library")
-            }
-
-            Section(isExpanded: $isStatusExpanded) {
-                ForEach(CompletionStatus.allCases, id: \.self) { status in
-                    Button {
-                        if appState.selectedStatusFilter == status {
-                            appState.selectedStatusFilter = nil
-                        } else {
-                            appState.selectedStatusFilter = status
-                        }
-                    } label: {
-                        Label {
-                            HStack {
-                                Text(status.label)
-                                Spacer()
-                                Text("\(statusCount(for: status))")
-                                    .foregroundStyle(.secondary)
-                                    .font(.caption)
-                            }
-                        } icon: {
-                            Image(systemName: status.icon)
-                                .foregroundStyle(statusColor(for: status))
-                        }
-                    }
-                    .buttonStyle(.plain)
-                    .listRowBackground(
-                        appState.selectedStatusFilter == status
-                            ? Color.accentColor.opacity(0.2)
-                            : Color.clear
-                    )
-                }
-            } header: {
-                Text("Status")
-            }
-
-            if !appState.uniquePlugins.isEmpty {
-                Section(isExpanded: $isPluginsExpanded) {
-                    ForEach(appState.uniquePlugins.prefix(20), id: \.self) { plugin in
-                        Button {
-                            if appState.selectedPluginFilter == plugin {
-                                appState.selectedPluginFilter = nil
-                            } else {
-                                appState.selectedPluginFilter = plugin
-                            }
-                        } label: {
-                            Label {
-                                HStack {
-                                    Text(plugin)
-                                        .lineLimit(1)
-                                    Spacer()
-                                    Text("\(pluginCount(for: plugin))")
-                                        .foregroundStyle(.secondary)
-                                        .font(.caption)
-                                }
-                            } icon: {
-                                Image(systemName: "puzzlepiece.extension")
-                                    .foregroundStyle(.orange)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .listRowBackground(
-                            appState.selectedPluginFilter == plugin
-                                ? Color.accentColor.opacity(0.2)
-                                : Color.clear
-                        )
-                    }
-                    if appState.uniquePlugins.count > 20 {
-                        Text("+ \(appState.uniquePlugins.count - 20) more...")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text("Plugins")
-                }
-            }
-
-            if !appState.uniqueKeys.isEmpty {
-                Section(isExpanded: $isKeysExpanded) {
-                    ForEach(appState.uniqueKeys, id: \.self) { key in
-                        Button {
-                            if appState.selectedKeyFilter == key {
-                                appState.selectedKeyFilter = nil
-                            } else {
-                                appState.selectedKeyFilter = key
-                            }
-                        } label: {
-                            Label {
-                                HStack {
-                                    Text(displayKey(key))
-                                        .lineLimit(1)
-                                    Spacer()
-                                    Text("\(keyCount(for: key))")
-                                        .foregroundStyle(.secondary)
-                                        .font(.caption)
-                                }
-                            } icon: {
-                                Image(systemName: "music.note")
-                                    .foregroundStyle(.pink)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .listRowBackground(
-                            appState.selectedKeyFilter == key
-                                ? Color.accentColor.opacity(0.2)
-                                : Color.clear
-                        )
-                    }
-                } header: {
-                    Text("Keys")
-                }
-            }
-
-            if !appState.uniqueFolders.isEmpty {
-                Section(isExpanded: $isFoldersExpanded) {
-                    ForEach(foldersWithMultipleVersions.prefix(20), id: \.self) { folder in
-                        Button {
-                            if appState.selectedFolderFilter == folder {
-                                appState.selectedFolderFilter = nil
-                            } else {
-                                appState.selectedFolderFilter = folder
-                            }
-                        } label: {
-                            Label {
-                                HStack {
-                                    Text(folder)
-                                        .lineLimit(1)
-                                    Spacer()
-                                    Text("\(folderCount(for: folder))")
-                                        .foregroundStyle(.secondary)
-                                        .font(.caption)
-                                }
-                            } icon: {
-                                Image(systemName: "folder")
-                                    .foregroundStyle(.cyan)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .listRowBackground(
-                            appState.selectedFolderFilter == folder
-                                ? Color.accentColor.opacity(0.2)
-                                : Color.clear
-                        )
-                    }
-                    if foldersWithMultipleVersions.count > 20 {
-                        Text("+ \(foldersWithMultipleVersions.count - 20) more...")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text("Project Folders")
-                }
-            }
-
-            if !appState.uniqueTags.isEmpty {
-                Section(isExpanded: $isTagsExpanded) {
-                    ForEach(appState.uniqueTags, id: \.self) { tag in
-                        Button {
-                            if appState.selectedTagFilter == tag {
-                                appState.selectedTagFilter = nil
-                            } else {
-                                appState.selectedTagFilter = tag
-                            }
-                        } label: {
-                            Label {
-                                HStack {
-                                    Text(tag)
-                                    Spacer()
-                                    Text("\(tagCount(for: tag))")
-                                        .foregroundStyle(.secondary)
-                                        .font(.caption)
-                                }
-                            } icon: {
-                                Image(systemName: "tag")
-                                    .foregroundStyle(.tint)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .listRowBackground(
-                            appState.selectedTagFilter == tag
-                                ? Color.accentColor.opacity(0.2)
-                                : Color.clear
-                        )
-                    }
-                } header: {
-                    Text("Tags")
-                }
-            }
-
-            Section(isExpanded: $isColorLabelsExpanded) {
-                ForEach(ColorLabel.allCases.filter { $0 != .none }, id: \.self) { label in
-                    let count = appState.colorLabelCount(for: label)
-                    if count > 0 {
-                        Button {
-                            if appState.selectedColorLabelFilter == label {
-                                appState.selectedColorLabelFilter = nil
-                            } else {
-                                appState.selectedColorLabelFilter = label
-                            }
-                        } label: {
-                            Label {
-                                HStack {
-                                    Text(label.label)
-                                    Spacer()
-                                    Text("\(count)")
-                                        .foregroundStyle(.secondary)
-                                        .font(.caption)
-                                }
-                            } icon: {
-                                Image(systemName: "circle.fill")
-                                    .foregroundStyle(colorForLabel(label))
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .listRowBackground(
-                            appState.selectedColorLabelFilter == label
-                                ? Color.accentColor.opacity(0.2)
-                                : Color.clear
-                        )
-                    }
-                }
-            } header: {
-                Text("Colors")
-            }
-
-            if !appState.uniqueVolumes.isEmpty {
-                Section(isExpanded: $isVolumesExpanded) {
-                    ForEach(appState.uniqueVolumes, id: \.self) { volume in
-                        Button {
-                            if appState.selectedVolumeFilter == volume {
-                                appState.selectedVolumeFilter = nil
-                            } else {
-                                appState.selectedVolumeFilter = volume
-                            }
-                        } label: {
-                            Label {
-                                HStack {
-                                    Text(volume)
-                                    Spacer()
-                                    Text("\(projectCount(for: volume))")
-                                        .foregroundStyle(.secondary)
-                                        .font(.caption)
-                                }
-                            } icon: {
-                                Image(systemName: volumeIcon(for: volume))
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .listRowBackground(
-                            appState.selectedVolumeFilter == volume
-                                ? Color.accentColor.opacity(0.2)
-                                : Color.clear
-                        )
-                    }
-                } header: {
-                    Text("Volumes")
-                }
-            }
-
-            Section(isExpanded: $isLocationsExpanded) {
-                ForEach(appState.locations) { location in
-                    Label {
-                        VStack(alignment: .leading) {
-                            Text(location.displayName)
-                            Text(location.path)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
-                    } icon: {
-                        Image(systemName: location.isAutoDetected ? "folder.fill" : "folder.badge.person.crop")
-                    }
-                    .contextMenu {
-                        Button("Reveal in Finder") {
-                            NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: location.path)
-                        }
-                        Divider()
-                        Button("Remove Location", role: .destructive) {
-                            Task {
-                                try? await appState.removeLocation(id: location.id)
-                            }
-                        }
-                    }
-                }
-
-                Button {
-                    selectFolder()
-                } label: {
-                    Label("Add Folder...", systemImage: "plus.circle")
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-            } header: {
-                Text("Locations")
+            // Dynamic sections based on stored order
+            ForEach(sectionOrder) { section in
+                sectionView(for: section)
             }
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 8) {
-                // Active filters indicator
-                if hasActiveFilters {
-                    HStack {
-                        Text("Filters active")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Clear") {
-                            clearAllFilters()
-                        }
-                        .font(.caption)
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.tint)
-                    }
-                    .padding(.horizontal)
-                }
-
-                if appState.isScanning {
-                    scanProgressView
-                }
-
-                Button {
-                    Task {
-                        await appState.startScan()
-                    }
-                } label: {
-                    Label(
-                        appState.isScanning ? "Scanning..." : "Scan All Locations",
-                        systemImage: appState.isScanning ? "arrow.triangle.2.circlepath" : "arrow.clockwise"
-                    )
-                    .frame(maxWidth: .infinity)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(appState.isScanning)
-                .padding(.horizontal)
-            }
-            .padding(.vertical, 8)
-            .background(.bar)
+            bottomBar
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
+            sectionOrder = SidebarOrderStorage.order
         }
     }
+
+    // MARK: - Library Section (Always First)
+
+    @ViewBuilder
+    private var librarySection: some View {
+        Section(isExpanded: $isLibraryExpanded) {
+            ForEach(ProjectFilter.allCases, id: \.self) { filter in
+                Label {
+                    HStack {
+                        Text(filter.rawValue)
+                        Spacer()
+                        if filter == .all {
+                            Text("\(appState.projectCount)")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        }
+                    }
+                } icon: {
+                    filterIcon(for: filter)
+                }
+                .tag(filter)
+            }
+
+            // Duplicates filter
+            if appState.duplicatesCount > 0 {
+                Button {
+                    appState.showDuplicatesOnly.toggle()
+                } label: {
+                    Label {
+                        HStack {
+                            Text("Duplicates")
+                            Spacer()
+                            Text("\(appState.duplicatesCount)")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        }
+                    } icon: {
+                        Image(systemName: "doc.on.doc")
+                            .foregroundStyle(.red)
+                    }
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(
+                    appState.showDuplicatesOnly
+                        ? Color.accentColor.opacity(0.2)
+                        : Color.clear
+                )
+            }
+        } header: {
+            Text("Library")
+        }
+    }
+
+    // MARK: - Dynamic Section Router
+
+    @ViewBuilder
+    private func sectionView(for section: SidebarSection) -> some View {
+        switch section {
+        case .status:
+            statusSection
+        case .colors:
+            colorsSection
+        case .plugins:
+            pluginsSection
+        case .keys:
+            keysSection
+        case .folders:
+            foldersSection
+        case .tags:
+            tagsSection
+        case .volumes:
+            volumesSection
+        case .locations:
+            locationsSection
+        }
+    }
+
+    // MARK: - Status Section
+
+    @ViewBuilder
+    private var statusSection: some View {
+        Section(isExpanded: expansionBinding(for: .status)) {
+            ForEach(CompletionStatus.allCases, id: \.self) { status in
+                Button {
+                    if appState.selectedStatusFilter == status {
+                        appState.selectedStatusFilter = nil
+                    } else {
+                        appState.selectedStatusFilter = status
+                    }
+                } label: {
+                    Label {
+                        HStack {
+                            Text(status.label)
+                            Spacer()
+                            Text("\(statusCount(for: status))")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        }
+                    } icon: {
+                        Image(systemName: status.icon)
+                            .foregroundStyle(statusColor(for: status))
+                    }
+                }
+                .buttonStyle(.plain)
+                .listRowBackground(
+                    appState.selectedStatusFilter == status
+                        ? Color.accentColor.opacity(0.2)
+                        : Color.clear
+                )
+            }
+        } header: {
+            Text("Status")
+        }
+    }
+
+    // MARK: - Colors Section
+
+    @ViewBuilder
+    private var colorsSection: some View {
+        Section(isExpanded: expansionBinding(for: .colors)) {
+            ForEach(ColorLabel.allCases.filter { $0 != .none }, id: \.self) { label in
+                let count = appState.colorLabelCount(for: label)
+                if count > 0 {
+                    Button {
+                        if appState.selectedColorLabelFilter == label {
+                            appState.selectedColorLabelFilter = nil
+                        } else {
+                            appState.selectedColorLabelFilter = label
+                        }
+                    } label: {
+                        Label {
+                            HStack {
+                                Text(label.label)
+                                Spacer()
+                                Text("\(count)")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            }
+                        } icon: {
+                            Image(systemName: "circle.fill")
+                                .foregroundStyle(colorForLabel(label))
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(
+                        appState.selectedColorLabelFilter == label
+                            ? Color.accentColor.opacity(0.2)
+                            : Color.clear
+                    )
+                }
+            }
+        } header: {
+            Text("Colors")
+        }
+    }
+
+    // MARK: - Plugins Section
+
+    @ViewBuilder
+    private var pluginsSection: some View {
+        if !appState.uniquePlugins.isEmpty {
+            Section(isExpanded: expansionBinding(for: .plugins)) {
+                ForEach(appState.uniquePlugins.prefix(20), id: \.self) { plugin in
+                    Button {
+                        if appState.selectedPluginFilter == plugin {
+                            appState.selectedPluginFilter = nil
+                        } else {
+                            appState.selectedPluginFilter = plugin
+                        }
+                    } label: {
+                        Label {
+                            HStack {
+                                Text(plugin)
+                                    .lineLimit(1)
+                                Spacer()
+                                Text("\(pluginCount(for: plugin))")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            }
+                        } icon: {
+                            Image(systemName: "puzzlepiece.extension")
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(
+                        appState.selectedPluginFilter == plugin
+                            ? Color.accentColor.opacity(0.2)
+                            : Color.clear
+                    )
+                }
+                if appState.uniquePlugins.count > 20 {
+                    Text("+ \(appState.uniquePlugins.count - 20) more...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Plugins")
+            }
+        }
+    }
+
+    // MARK: - Keys Section
+
+    @ViewBuilder
+    private var keysSection: some View {
+        if !appState.uniqueKeys.isEmpty {
+            Section(isExpanded: expansionBinding(for: .keys)) {
+                ForEach(appState.uniqueKeys, id: \.self) { key in
+                    Button {
+                        if appState.selectedKeyFilter == key {
+                            appState.selectedKeyFilter = nil
+                        } else {
+                            appState.selectedKeyFilter = key
+                        }
+                    } label: {
+                        Label {
+                            HStack {
+                                Text(displayKey(key))
+                                    .lineLimit(1)
+                                Spacer()
+                                Text("\(keyCount(for: key))")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            }
+                        } icon: {
+                            Image(systemName: "music.note")
+                                .foregroundStyle(.pink)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(
+                        appState.selectedKeyFilter == key
+                            ? Color.accentColor.opacity(0.2)
+                            : Color.clear
+                    )
+                }
+            } header: {
+                Text("Keys")
+            }
+        }
+    }
+
+    // MARK: - Folders Section
+
+    @ViewBuilder
+    private var foldersSection: some View {
+        if !appState.uniqueFolders.isEmpty {
+            Section(isExpanded: expansionBinding(for: .folders)) {
+                ForEach(foldersWithMultipleVersions.prefix(20), id: \.self) { folder in
+                    Button {
+                        if appState.selectedFolderFilter == folder {
+                            appState.selectedFolderFilter = nil
+                        } else {
+                            appState.selectedFolderFilter = folder
+                        }
+                    } label: {
+                        Label {
+                            HStack {
+                                Text(folder)
+                                    .lineLimit(1)
+                                Spacer()
+                                Text("\(folderCount(for: folder))")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            }
+                        } icon: {
+                            Image(systemName: "folder")
+                                .foregroundStyle(.cyan)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(
+                        appState.selectedFolderFilter == folder
+                            ? Color.accentColor.opacity(0.2)
+                            : Color.clear
+                    )
+                }
+                if foldersWithMultipleVersions.count > 20 {
+                    Text("+ \(foldersWithMultipleVersions.count - 20) more...")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } header: {
+                Text("Project Folders")
+            }
+        }
+    }
+
+    // MARK: - Tags Section
+
+    @ViewBuilder
+    private var tagsSection: some View {
+        if !appState.uniqueTags.isEmpty {
+            Section(isExpanded: expansionBinding(for: .tags)) {
+                ForEach(appState.uniqueTags, id: \.self) { tag in
+                    Button {
+                        if appState.selectedTagFilter == tag {
+                            appState.selectedTagFilter = nil
+                        } else {
+                            appState.selectedTagFilter = tag
+                        }
+                    } label: {
+                        Label {
+                            HStack {
+                                Text(tag)
+                                Spacer()
+                                Text("\(tagCount(for: tag))")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            }
+                        } icon: {
+                            Image(systemName: "tag")
+                                .foregroundStyle(.tint)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(
+                        appState.selectedTagFilter == tag
+                            ? Color.accentColor.opacity(0.2)
+                            : Color.clear
+                    )
+                }
+            } header: {
+                Text("Tags")
+            }
+        }
+    }
+
+    // MARK: - Volumes Section
+
+    @ViewBuilder
+    private var volumesSection: some View {
+        if !appState.uniqueVolumes.isEmpty {
+            Section(isExpanded: expansionBinding(for: .volumes)) {
+                ForEach(appState.uniqueVolumes, id: \.self) { volume in
+                    Button {
+                        if appState.selectedVolumeFilter == volume {
+                            appState.selectedVolumeFilter = nil
+                        } else {
+                            appState.selectedVolumeFilter = volume
+                        }
+                    } label: {
+                        Label {
+                            HStack {
+                                Text(volume)
+                                Spacer()
+                                Text("\(projectCount(for: volume))")
+                                    .foregroundStyle(.secondary)
+                                    .font(.caption)
+                            }
+                        } icon: {
+                            Image(systemName: volumeIcon(for: volume))
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .listRowBackground(
+                        appState.selectedVolumeFilter == volume
+                            ? Color.accentColor.opacity(0.2)
+                            : Color.clear
+                    )
+                }
+            } header: {
+                Text("Volumes")
+            }
+        }
+    }
+
+    // MARK: - Locations Section
+
+    @ViewBuilder
+    private var locationsSection: some View {
+        Section(isExpanded: expansionBinding(for: .locations)) {
+            ForEach(appState.locations) { location in
+                Label {
+                    VStack(alignment: .leading) {
+                        Text(location.displayName)
+                        Text(location.path)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                } icon: {
+                    Image(systemName: location.isAutoDetected ? "folder.fill" : "folder.badge.person.crop")
+                }
+                .contextMenu {
+                    Button("Reveal in Finder") {
+                        NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: location.path)
+                    }
+                    Divider()
+                    Button("Remove Location", role: .destructive) {
+                        Task {
+                            try? await appState.removeLocation(id: location.id)
+                        }
+                    }
+                }
+            }
+
+            Button {
+                selectFolder()
+            } label: {
+                Label("Add Folder...", systemImage: "plus.circle")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+        } header: {
+            Text("Locations")
+        }
+    }
+
+    // MARK: - Bottom Bar
+
+    @ViewBuilder
+    private var bottomBar: some View {
+        VStack(spacing: 8) {
+            // Active filters indicator
+            if hasActiveFilters {
+                HStack {
+                    Text("Filters active")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Clear") {
+                        clearAllFilters()
+                    }
+                    .font(.caption)
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.tint)
+                }
+                .padding(.horizontal)
+            }
+
+            if appState.isScanning {
+                scanProgressView
+            }
+
+            Button {
+                Task {
+                    await appState.startScan()
+                }
+            } label: {
+                Label(
+                    appState.isScanning ? "Scanning..." : "Scan All Locations",
+                    systemImage: appState.isScanning ? "arrow.triangle.2.circlepath" : "arrow.clockwise"
+                )
+                .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(appState.isScanning)
+            .padding(.horizontal)
+        }
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+
+    // MARK: - Expansion Binding Helper
+
+    private func expansionBinding(for section: SidebarSection) -> Binding<Bool> {
+        Binding(
+            get: { expandedSections.contains(section) },
+            set: { isExpanded in
+                if isExpanded {
+                    expandedSections.insert(section)
+                } else {
+                    expandedSections.remove(section)
+                }
+            }
+        )
+    }
+
+    // MARK: - Computed Properties
 
     private var hasActiveFilters: Bool {
         appState.selectedStatusFilter != nil ||
@@ -425,6 +523,15 @@ struct SidebarView: View {
         appState.selectedFilter != .all
     }
 
+    private var foldersWithMultipleVersions: [String] {
+        appState.projectsByFolder
+            .filter { $0.value.count > 1 }
+            .keys
+            .sorted()
+    }
+
+    // MARK: - Helper Functions
+
     private func clearAllFilters() {
         appState.selectedStatusFilter = nil
         appState.selectedColorLabelFilter = nil
@@ -436,13 +543,6 @@ struct SidebarView: View {
         appState.showFavoritesOnly = false
         appState.showDuplicatesOnly = false
         appState.selectedFilter = .all
-    }
-
-    private var foldersWithMultipleVersions: [String] {
-        appState.projectsByFolder
-            .filter { $0.value.count > 1 }
-            .keys
-            .sorted()
     }
 
     @ViewBuilder
