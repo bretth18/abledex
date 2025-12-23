@@ -6,3 +6,6 @@ package-lock.json
 CMakePresets.json
 .build
 .claude
+
+# Test fixtures (real Ableton projects not committed)
+abledexTests/Fixtures/test Project/
