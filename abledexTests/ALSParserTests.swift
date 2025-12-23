@@ -17,21 +17,10 @@ struct ALSParserTests {
     // MARK: - Real ALS File Tests
 
     /// Tests parsing of a real Ableton Live project file.
-    /// This test is skipped in CI environments where the fixture isn't available.
-    @Test("Parses real Ableton 12.3.2 project file")
+    /// This test only runs when the fixture is available (local dev, not CI).
+    @Test("Parses real Ableton 12.3.2 project file", .enabled(if: realALSFixtureExists))
     func parseRealALSFile() throws {
-        // Path to real ALS file created with Ableton Live 12.3.2
-        let fixtureURL = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .appendingPathComponent("Fixtures/test Project/test.als")
-
-        // Skip test if fixture not available (e.g., in CI)
-        try #require(
-            FileManager.default.fileExists(atPath: fixtureURL.path),
-            "Skipping: Real ALS fixture not available (not committed to repo)"
-        )
-
-        let result = try parser.parse(alsFilePath: fixtureURL)
+        let result = try parser.parse(alsFilePath: Self.realALSFixtureURL)
 
         // Verify metadata from real Ableton project
         #expect(result.bpm == 132.0)
@@ -42,6 +31,16 @@ struct ALSParserTests {
         #expect(result.timeSignatureNumerator == 4)
         #expect(result.timeSignatureDenominator == 4)
     }
+
+    // Path to real ALS fixture
+    private nonisolated static let realALSFixtureURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .appendingPathComponent("Fixtures/test Project/test.als")
+
+    // Check if fixture exists (used to conditionally enable test)
+    private nonisolated static let realALSFixtureExists = FileManager.default.fileExists(
+        atPath: realALSFixtureURL.path
+    )
 
     // MARK: - Basic Parsing Tests
 
