@@ -10,14 +10,30 @@
 		A60285102EEE300000893D52 /* GRDB in Frameworks */ = {isa = PBXBuildFile; productRef = A6028510EEEE300000893D52 /* GRDB */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		A60285202EEE400000893D52 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A60284F02EEE2E9D00893D52 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A60284F72EEE2E9D00893D52;
+			remoteInfo = abledex;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		A60284F82EEE2E9D00893D52 /* abledex.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = abledex.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A60285212EEE400000893D52 /* abledexTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = abledexTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
 		A60284FA2EEE2E9D00893D52 /* abledex */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = abledex;
+			sourceTree = "<group>";
+		};
+		A60285222EEE400000893D52 /* abledexTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = abledexTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -31,6 +47,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A60285232EEE400000893D52 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -38,6 +61,7 @@
 			isa = PBXGroup;
 			children = (
 				A60284FA2EEE2E9D00893D52 /* abledex */,
+				A60285222EEE400000893D52 /* abledexTests */,
 				A60284F92EEE2E9D00893D52 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -46,6 +70,7 @@
 			isa = PBXGroup;
 			children = (
 				A60284F82EEE2E9D00893D52 /* abledex.app */,
+				A60285212EEE400000893D52 /* abledexTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -76,6 +101,27 @@
 			productReference = A60284F82EEE2E9D00893D52 /* abledex.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A60285242EEE400000893D52 /* abledexTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A60285252EEE400000893D52 /* Build configuration list for PBXNativeTarget "abledexTests" */;
+			buildPhases = (
+				A60285262EEE400000893D52 /* Sources */,
+				A60285232EEE400000893D52 /* Frameworks */,
+				A60285272EEE400000893D52 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A60285282EEE400000893D52 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A60285222EEE400000893D52 /* abledexTests */,
+			);
+			name = abledexTests;
+			productName = abledexTests;
+			productReference = A60285212EEE400000893D52 /* abledexTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -88,6 +134,10 @@
 				TargetAttributes = {
 					A60284F72EEE2E9D00893D52 = {
 						CreatedOnToolsVersion = 26.0.1;
+					};
+					A60285242EEE400000893D52 = {
+						CreatedOnToolsVersion = 26.0.1;
+						TestTargetID = A60284F72EEE2E9D00893D52;
 					};
 				};
 			};
@@ -109,12 +159,20 @@
 			projectRoot = "";
 			targets = (
 				A60284F72EEE2E9D00893D52 /* abledex */,
+				A60285242EEE400000893D52 /* abledexTests */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A60284F62EEE2E9D00893D52 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A60285272EEE400000893D52 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -131,7 +189,22 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A60285262EEE400000893D52 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A60285282EEE400000893D52 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A60284F72EEE2E9D00893D52 /* abledex */;
+			targetProxy = A60285202EEE400000893D52 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A60285012EEE2E9E00893D52 /* Debug */ = {
@@ -262,7 +335,7 @@
 				CODE_SIGN_ENTITLEMENTS = abledex/abledex.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = 94XUGF9CU7;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -297,7 +370,7 @@
 				CODE_SIGN_ENTITLEMENTS = abledex/abledex.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 4;
+				CURRENT_PROJECT_VERSION = 5;
 				DEVELOPMENT_TEAM = 94XUGF9CU7;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -324,6 +397,48 @@
 			};
 			name = Release;
 		};
+		A60285292EEE400000893D52 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 94XUGF9CU7;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = computerdata.abledexTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/abledex.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/abledex";
+			};
+			name = Debug;
+		};
+		A602852A2EEE400000893D52 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 94XUGF9CU7;
+				GENERATE_INFOPLIST_FILE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 15.6;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = computerdata.abledexTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/abledex.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/abledex";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -341,6 +456,15 @@
 			buildConfigurations = (
 				A60285042EEE2E9E00893D52 /* Debug */,
 				A60285052EEE2E9E00893D52 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A60285252EEE400000893D52 /* Build configuration list for PBXNativeTarget "abledexTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A60285292EEE400000893D52 /* Debug */,
+				A602852A2EEE400000893D52 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
