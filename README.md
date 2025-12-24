@@ -36,7 +36,7 @@ built with swift and swiftUI, abledex provides a familiar interface for macOS us
 
 
 ## Dependencies
-- GRDB
+- [GRDB](https://github.com/groue/GRDB.swift)
 
 ## Contributing
 Contributions are welcome, Please open an issue or submit a pull request.
