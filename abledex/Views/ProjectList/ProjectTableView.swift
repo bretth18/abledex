@@ -39,10 +39,11 @@ struct ProjectTableView: View {
                 TableColumn("Name") { project in
                     HStack {
                         Image(systemName: "music.note")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(project.colorLabel.rawValue != 0 ? project.colorLabel.color : .secondary)
                         VStack(alignment: .leading) {
                             Text(project.name)
                                 .lineLimit(1)
+                                .foregroundStyle(project.colorLabel.color)
                             if project.hasMissingSamples {
                                 Label("Missing samples", systemImage: "exclamationmark.triangle.fill")
                                     .font(.caption2)
@@ -138,6 +139,17 @@ struct ProjectTableView: View {
                         .foregroundStyle(.secondary)
                 }
                 .width(min: 80, ideal: 120)
+                
+                /// TODO: refactor table to allow more than 10 columns so we can add this back in
+//                TableColumn("Color") { project in
+//                    Label(String(project.colorLabel.label), systemImage: "tag.fill")
+//                        .font(.caption)
+//                        .foregroundStyle(project.colorLabel.color)
+//                }
+//                .width(min: 80, ideal: 100)
+                
+
+                
             } rows: {
                 ForEach(appState.filteredProjects) { project in
                     TableRow(project)

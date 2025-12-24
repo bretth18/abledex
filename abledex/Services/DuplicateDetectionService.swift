@@ -62,7 +62,7 @@ struct DuplicateDetectionService: Sendable {
 
         for project in projects {
             guard !processed.contains(project.id) else { continue }
-            guard let bpm = project.bpm else { continue }
+            guard project.bpm != nil else { continue }
 
             var similar: [ProjectRecord] = [project]
 

@@ -18,9 +18,16 @@ struct SidebarView: View {
         @Bindable var state = appState
 
         List(selection: $state.selectedFilter) {
-            Text(appTitle)
-                .font(.largeTitle.bold())
-                .padding(.vertical, 4)
+            
+            HStack(alignment: .center) {
+                Image(.logo)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 32, height: 32)
+                Text(appTitle)
+                    .font(.largeTitle.bold())
+                    .padding(.vertical, 4)
+            }
 
             // Library section (always first)
             librarySection
