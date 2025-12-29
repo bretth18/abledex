@@ -7,6 +7,7 @@
 
 import Foundation
 import GRDB
+import SwiftUI
 
 enum CompletionStatus: Int, Codable, Sendable, CaseIterable {
     case none = 0
@@ -79,6 +80,19 @@ enum ColorLabel: Int, Codable, Sendable, CaseIterable {
         case .blue: return "blue"
         case .purple: return "purple"
         case .gray: return "gray"
+        }
+    }
+    
+    var color: Color {
+        switch self {
+        case .none: return .primary
+        case .red: return .red
+        case .orange: return .orange
+        case .yellow: return .yellow
+        case .green: return .green
+        case .blue: return .blue
+        case .purple: return .purple
+        case .gray: return .gray
         }
     }
 }

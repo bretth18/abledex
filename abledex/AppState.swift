@@ -494,6 +494,20 @@ final class AppState {
     func colorLabelCount(for label: ColorLabel) -> Int {
         projects.filter { $0.colorLabel == label }.count
     }
+
+    func clearAllFilters() {
+        selectedFilter = .all
+        selectedVolumeFilter = nil
+        selectedStatusFilter = nil
+        selectedColorLabelFilter = nil
+        selectedTagFilter = nil
+        selectedPluginFilter = nil
+        selectedKeyFilter = nil
+        selectedFolderFilter = nil
+        showFavoritesOnly = false
+        showDuplicatesOnly = false
+        searchQuery = ""
+    }
 }
 
 // MARK: - Supporting Types

@@ -34,7 +34,7 @@ struct ProjectDetailView: View {
             }
             .padding()
         }
-        .frame(minWidth: 280)
+        .frame(minWidth: 300)
         .onAppear {
             editingNotes = project.userNotes ?? ""
             loadPreviewableAudio()
