@@ -67,7 +67,7 @@ final class ProjectScanner: Sendable {
 
         // Parse in batches to avoid memory pressure
         var processed = 0
-        let batchSize = 10
+        let batchSize = 50
 
         for batch in stride(from: 0, to: total, by: batchSize) {
             let end = min(batch + batchSize, total)
@@ -160,8 +160,35 @@ final class ProjectScanner: Sendable {
     }
 
     private nonisolated func calculateFileHash(url: URL) -> String? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        let digest = Insecure.MD5.hash(data: data)
+        // Use file size + first/last 64KB for fast hashing instead of reading entire file
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let fileSize = attrs[.size] as? UInt64 else { return nil }
+
+        let sampleSize = min(65536, Int(fileSize)) // 64KB or less
+
+        var hasher = Insecure.MD5()
+
+        // Hash file size
+        var size = fileSize
+        withUnsafeBytes(of: &size) { hasher.update(bufferPointer: $0) }
+
+        // Hash first chunk
+        if let firstChunk = try? handle.read(upToCount: sampleSize) {
+            hasher.update(data: firstChunk)
+        }
+
+        // Hash last chunk if file is large enough
+        if fileSize > UInt64(sampleSize * 2) {
+            try? handle.seek(toOffset: fileSize - UInt64(sampleSize))
+            if let lastChunk = try? handle.read(upToCount: sampleSize) {
+                hasher.update(data: lastChunk)
+            }
+        }
+
+        let digest = hasher.finalize()
         return digest.map { String(format: "%02hhx", $0) }.joined()
     }
 }

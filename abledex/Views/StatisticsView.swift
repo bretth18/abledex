@@ -12,6 +12,11 @@ struct StatisticsView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
 
+    // Cached storage data to avoid synchronous file I/O on every render
+    @State private var cachedStorageByVolume: [(volume: String, size: Int64, count: Int)] = []
+    @State private var cachedTotalStorage: Int64 = 0
+    @State private var isLoadingStorage = true
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -113,13 +118,21 @@ struct StatisticsView: View {
                     Text("Storage by Volume")
                         .font(.headline)
 
-                    if storageByVolume.isEmpty {
+                    if isLoadingStorage {
+                        HStack {
+                            ProgressView()
+                                .scaleEffect(0.7)
+                            Text("Calculating storage...")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                        }
+                    } else if cachedStorageByVolume.isEmpty {
                         Text("No volume data available")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     } else {
                         VStack(spacing: 8) {
-                            ForEach(storageByVolume, id: \.volume) { item in
+                            ForEach(cachedStorageByVolume, id: \.volume) { item in
                                 Button {
                                     appState.clearAllFilters()
                                     appState.selectedVolumeFilter = item.volume
@@ -145,7 +158,7 @@ struct StatisticsView: View {
 
                         HStack {
                             Spacer()
-                            Text("Total: \(formatBytes(totalStorageSize))")
+                            Text("Total: \(formatBytes(cachedTotalStorage))")
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
@@ -358,6 +371,44 @@ struct StatisticsView: View {
             .padding()
         }
         .frame(minWidth: 700, idealWidth: 800, minHeight: 600, idealHeight: 700)
+        .task {
+            await loadStorageData()
+        }
+    }
+
+    // MARK: - Async Storage Loading
+
+    private func loadStorageData() async {
+        let projects = appState.projects
+        let result = await Task.detached(priority: .userInitiated) {
+            var byVolume: [String: (size: Int64, count: Int)] = [:]
+            var total: Int64 = 0
+
+            for project in projects {
+                let url = URL(fileURLWithPath: project.alsFilePath)
+                if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+                   let size = attrs[.size] as? UInt64 {
+                    let sizeInt64 = Int64(size)
+                    total += sizeInt64
+
+                    let volume = project.sourceVolume
+                    if let existing = byVolume[volume] {
+                        byVolume[volume] = (existing.size + sizeInt64, existing.count + 1)
+                    } else {
+                        byVolume[volume] = (sizeInt64, 1)
+                    }
+                }
+            }
+
+            let sorted = byVolume.map { (volume: $0.key, size: $0.value.size, count: $0.value.count) }
+                .sorted { $0.size > $1.size }
+
+            return (sorted, total)
+        }.value
+
+        cachedStorageByVolume = result.0
+        cachedTotalStorage = result.1
+        isLoadingStorage = false
     }
 
     // MARK: - Computed Stats
@@ -446,32 +497,6 @@ struct StatisticsView: View {
     }
 
     // MARK: - Storage Stats
-
-    private var totalStorageSize: Int64 {
-        appState.projects.reduce(Int64(0)) { sum, project in
-            let url = URL(fileURLWithPath: project.alsFilePath)
-            if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-               let size = attrs[.size] as? UInt64 {
-                return sum + Int64(size)
-            }
-            return sum
-        }
-    }
-
-    private var storageByVolume: [(volume: String, size: Int64, count: Int)] {
-        let grouped = Dictionary(grouping: appState.projects, by: { $0.sourceVolume })
-        return grouped.map { (volume, projects) in
-            let size = projects.reduce(Int64(0)) { sum, project in
-                let url = URL(fileURLWithPath: project.alsFilePath)
-                if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
-                   let fileSize = attrs[.size] as? UInt64 {
-                    return sum + Int64(fileSize)
-                }
-                return sum
-            }
-            return (volume, size, projects.count)
-        }.sorted { $0.size > $1.size }
-    }
 
     private func formatBytes(_ bytes: Int64) -> String {
         let formatter = ByteCountFormatter()

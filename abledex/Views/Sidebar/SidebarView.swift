@@ -21,6 +21,7 @@ struct SidebarView: View {
             
             HStack(alignment: .center) {
                 Image(.logo)
+                    .renderingMode(.template)
                     .resizable()
                     .scaledToFit()
                     .frame(width: 32, height: 32)
