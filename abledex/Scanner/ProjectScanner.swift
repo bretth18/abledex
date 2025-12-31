@@ -97,7 +97,8 @@ final class ProjectScanner: Sendable {
             }
 
             processed += batchProjects.count
-            if let lastProject = batchProjects.last {
+            // Only report progress every 5 batches to reduce UI updates
+            if processed % (batchSize * 5) == 0 || processed == total, let lastProject = batchProjects.last {
                 progress(.parsing(current: processed, total: total, projectName: lastProject.projectName))
             }
         }

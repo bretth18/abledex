@@ -20,7 +20,7 @@ struct SidebarView: View {
         List(selection: $state.selectedFilter) {
             
             HStack(alignment: .center) {
-                Image(.logo)
+                Image(.logopdf)
                     .renderingMode(.template)
                     .resizable()
                     .scaledToFit()
@@ -532,10 +532,7 @@ struct SidebarView: View {
     }
 
     private var foldersWithMultipleVersions: [String] {
-        appState.projectsByFolder
-            .filter { $0.value.count > 1 }
-            .keys
-            .sorted()
+        appState.cachedFoldersWithMultipleVersions
     }
 
     // MARK: - Helper Functions
@@ -617,23 +614,23 @@ struct SidebarView: View {
     }
 
     private func projectCount(for volume: String) -> Int {
-        appState.projects.filter { $0.sourceVolume == volume }.count
+        appState.volumeCounts[volume] ?? 0
     }
 
     private func tagCount(for tag: String) -> Int {
-        appState.projects.filter { $0.userTags.contains(tag) }.count
+        appState.tagCounts[tag] ?? 0
     }
 
     private func pluginCount(for plugin: String) -> Int {
-        appState.projects.filter { $0.plugins.contains(plugin) }.count
+        appState.pluginCounts[plugin] ?? 0
     }
 
     private func keyCount(for key: String) -> Int {
-        appState.projects.filter { $0.musicalKeys.contains(key) }.count
+        appState.keyCounts[key] ?? 0
     }
 
     private func folderCount(for folder: String) -> Int {
-        appState.projectsByFolder[folder]?.count ?? 0
+        appState.folderCounts[folder] ?? 0
     }
 
     private func displayKey(_ key: String) -> String {
@@ -652,7 +649,7 @@ struct SidebarView: View {
     }
 
     private func statusCount(for status: CompletionStatus) -> Int {
-        appState.projects.filter { $0.completionStatus == status }.count
+        appState.statusCounts[status] ?? 0
     }
 
     private func statusColor(for status: CompletionStatus) -> Color {
