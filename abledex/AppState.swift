@@ -23,10 +23,13 @@ final class AppState {
 
     var projects: [ProjectRecord] = [] {
         didSet {
+            // Skip if this is the initial load (caches already populated)
+            guard !isInitialLoad else { return }
             recomputeCachedCounts()
             recomputeFilteredProjects()
         }
     }
+    private var isInitialLoad = true
     var locations: [LocationRecord] = []
     var selectedProjectIDs: Set<UUID> = []
     var searchQuery: String = "" {
@@ -59,6 +62,8 @@ final class AppState {
     private(set) var cachedUniqueFolders: [String] = []
     private(set) var cachedFoldersWithMultipleVersions: [String] = []
     private(set) var cachedProjectsByFolder: [String: [ProjectRecord]] = [:]
+    private(set) var cachedDuplicateGroups: [DuplicateGroup] = []
+    private(set) var cachedDuplicatesCount: Int = 0
 
     private func recomputeCachedCounts() {
         var newStatusCounts: [CompletionStatus: Int] = [:]
@@ -114,11 +119,21 @@ final class AppState {
         cachedUniqueFolders = newFolderCounts.keys.sorted()
         cachedFoldersWithMultipleVersions = newFolderCounts.filter { $0.value > 1 }.keys.sorted()
         cachedProjectsByFolder = Dictionary(grouping: projects, by: { $0.projectFolderName })
+
+        // Recompute duplicates in background (O(n²) operation)
+        let projectsCopy = projects
+        Task.detached(priority: .utility) { [weak self] in
+            let groups = DuplicateDetectionService().findDuplicates(in: projectsCopy)
+            let count = Set(groups.flatMap { $0.projects.map { $0.id } }).count
+            await MainActor.run {
+                self?.cachedDuplicateGroups = groups
+                self?.cachedDuplicatesCount = count
+            }
+        }
     }
 
     var isScanning: Bool = false
     var scanProgress: ScanProgress?
-    var isLoading: Bool = true
 
     // Sorting
     var sortColumn: SortColumn = .modifiedDate { didSet { recomputeFilteredProjects() } }
@@ -296,11 +311,11 @@ final class AppState {
     }
 
     var duplicateGroups: [DuplicateGroup] {
-        duplicateService.findDuplicates(in: projects)
+        cachedDuplicateGroups
     }
 
     var duplicatesCount: Int {
-        Set(duplicateGroups.flatMap { $0.projects.map { $0.id } }).count
+        cachedDuplicatesCount
     }
 
     func hasDuplicates(_ project: ProjectRecord) -> Bool {
@@ -336,7 +351,6 @@ final class AppState {
     // MARK: - Data Loading
 
     func loadData() async {
-        isLoading = true
         do {
             // Fetch from database (off main thread via async)
             let fetchedProjects = try await database.fetchAllProjects()
@@ -364,9 +378,12 @@ final class AppState {
             cachedFoldersWithMultipleVersions = caches.foldersWithMultipleVersions
             cachedProjectsByFolder = caches.projectsByFolder
             cachedFilteredProjects = caches.filteredProjects
+            cachedDuplicateGroups = caches.duplicateGroups
+            cachedDuplicatesCount = caches.duplicatesCount
 
-            // Set projects last (triggers didSet but caches already populated)
+            // Set projects (didSet skipped due to isInitialLoad flag)
             projects = fetchedProjects
+            isInitialLoad = false
 
             if locations.isEmpty {
                 await initializeDefaultLocations()
@@ -374,7 +391,6 @@ final class AppState {
         } catch {
             print("Failed to load data: \(error)")
         }
-        isLoading = false
     }
 
     private struct ComputedCaches: Sendable {
@@ -393,6 +409,8 @@ final class AppState {
         var foldersWithMultipleVersions: [String]
         var projectsByFolder: [String: [ProjectRecord]]
         var filteredProjects: [ProjectRecord]
+        var duplicateGroups: [DuplicateGroup]
+        var duplicatesCount: Int
     }
 
     private nonisolated func computeCachesOffMainThread(for projects: [ProjectRecord]) -> ComputedCaches {
@@ -419,6 +437,10 @@ final class AppState {
             ($0.modifiedDate ?? $0.filesystemModifiedDate) > ($1.modifiedDate ?? $1.filesystemModifiedDate)
         }
 
+        // Compute duplicates (O(n²) but done off main thread)
+        let duplicateGroups = DuplicateDetectionService().findDuplicates(in: projects)
+        let duplicatesCount = Set(duplicateGroups.flatMap { $0.projects.map { $0.id } }).count
+
         return ComputedCaches(
             statusCounts: statusCounts,
             colorLabelCounts: colorLabelCounts,
@@ -434,7 +456,9 @@ final class AppState {
             uniqueFolders: folderCounts.keys.sorted(),
             foldersWithMultipleVersions: folderCounts.filter { $0.value > 1 }.keys.sorted(),
             projectsByFolder: Dictionary(grouping: projects, by: { $0.projectFolderName }),
-            filteredProjects: sortedProjects
+            filteredProjects: sortedProjects,
+            duplicateGroups: duplicateGroups,
+            duplicatesCount: duplicatesCount
         )
     }
 

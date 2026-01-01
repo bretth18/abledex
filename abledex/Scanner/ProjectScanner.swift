@@ -14,6 +14,21 @@ enum ScanProgress: Sendable {
     case parsing(current: Int, total: Int, projectName: String)
     case completed(projectCount: Int, duration: TimeInterval)
     case failed(Error)
+
+    var description: String {
+        switch self {
+        case .starting:
+            return "starting"
+        case .discovering(let location):
+            return "discovering-\(location)"
+        case .parsing(let current, _, let name):
+            return "parsing-\(current)-\(name)"
+        case .completed(let count, _):
+            return "completed-\(count)"
+        case .failed:
+            return "failed"
+        }
+    }
 }
 
 final class ProjectScanner: Sendable {
@@ -97,8 +112,8 @@ final class ProjectScanner: Sendable {
             }
 
             processed += batchProjects.count
-            // Only report progress every 5 batches to reduce UI updates
-            if processed % (batchSize * 5) == 0 || processed == total, let lastProject = batchProjects.last {
+            // Report progress every batch for responsive UI
+            if let lastProject = batchProjects.last {
                 progress(.parsing(current: processed, total: total, projectName: lastProject.projectName))
             }
         }
