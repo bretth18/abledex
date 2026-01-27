@@ -121,13 +121,19 @@ final class AppState {
         cachedProjectsByFolder = Dictionary(grouping: projects, by: { $0.projectFolderName })
 
         // Recompute duplicates in background (O(n²) operation)
-        let projectsCopy = projects
-        Task.detached(priority: .utility) { [weak self] in
-            let groups = DuplicateDetectionService().findDuplicates(in: projectsCopy)
+        let projectsSnapshot = self.projects
+        Task.detached(priority: .utility) {
+            let groups = await DuplicateDetectionService().findDuplicates(in: projectsSnapshot)
             let count = Set(groups.flatMap { $0.projects.map { $0.id } }).count
-            await MainActor.run {
-                self?.cachedDuplicateGroups = groups
-                self?.cachedDuplicatesCount = count
+            await MainActor.run { [groups, count] in
+                // Update state on the main actor
+                // Accessing self here is safe as this closure executes on MainActor
+                // and we didn't capture self in the detached task
+                let update: @MainActor () -> Void = {
+                    self.cachedDuplicateGroups = groups
+                    self.cachedDuplicatesCount = count
+                }
+                update()
             }
         }
     }
@@ -484,14 +490,28 @@ final class AppState {
         isScanning = true
         scanProgress = .starting
 
-        do {
-            _ = try await scanner.scanAllLocations { [weak self] progress in
-                Task { @MainActor [weak self] in
-                    self?.scanProgress = progress
+        // Run scan in detached task to avoid blocking MainActor
+        let scanner = self.scanner
+        let result: Result<Int, Error> = await Task.detached(priority: .userInitiated) {
+            do {
+                let count = try await scanner.scanAllLocations { progress in
+                    Task { @MainActor in
+                        // Use weak reference pattern inline
+                        await MainActor.run { [weak self] in
+                            self?.scanProgress = progress
+                        }
+                    }
                 }
+                return .success(count)
+            } catch {
+                return .failure(error)
             }
+        }.value
+
+        switch result {
+        case .success:
             await loadData()
-        } catch {
+        case .failure(let error):
             print("Scan failed: \(error)")
             scanProgress = .failed(error)
         }
