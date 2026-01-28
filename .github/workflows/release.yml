@@ -32,21 +32,19 @@ jobs:
         security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
         security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-        # Import Developer ID Application certificate (for app signing)
+        # Import Developer ID Application certificate + private key (for app signing)
         echo "$DEVELOPER_ID_APPLICATION_P12" | base64 --decode > /tmp/app_cert.p12
         security import /tmp/app_cert.p12 \
           -P "$P12_PASSWORD" \
           -A \
-          -t cert \
           -f pkcs12 \
           -k "$KEYCHAIN_PATH"
 
-        # Import Developer ID Installer certificate (for pkg signing)
+        # Import Developer ID Installer certificate + private key (for pkg signing)
         echo "$DEVELOPER_ID_INSTALLER_P12" | base64 --decode > /tmp/installer_cert.p12
         security import /tmp/installer_cert.p12 \
           -P "$P12_PASSWORD" \
           -A \
-          -t cert \
           -f pkcs12 \
           -k "$KEYCHAIN_PATH"
 
