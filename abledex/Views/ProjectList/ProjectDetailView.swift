@@ -799,8 +799,8 @@ struct XMLViewerSheet: View {
     private func loadXML() async {
         let filePath = URL(fileURLWithPath: project.alsFilePath)
 
-        // Run on background thread with low priority to avoid blocking scan
-        let result: Result<String, Error> = await Task.detached(priority: .utility) {
+        // Run on background thread with low priority to avoid competing with scan I/O
+        let result: Result<String, Error> = await Task.detached(priority: .background) {
             let parser = ALSParser()
             return Result { try parser.getRawXML(alsFilePath: filePath) }
         }.value
@@ -817,9 +817,14 @@ struct XMLViewerSheet: View {
     }
 }
 
-/// NSTextView wrapper for performant large text display
+/// NSTextView wrapper for performant large text display.
+/// Uses Coordinator to set text off the main layout pass to avoid UI stalls.
 struct XMLTextView: NSViewRepresentable {
     let text: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator()
+    }
 
     func makeNSView(context: Context) -> NSScrollView {
         let scrollView = NSTextView.scrollableTextView()
@@ -830,20 +835,44 @@ struct XMLTextView: NSViewRepresentable {
         textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
         textView.backgroundColor = NSColor.textBackgroundColor
         textView.textContainerInset = NSSize(width: 8, height: 8)
+        textView.isAutomaticQuoteSubstitutionEnabled = false
+        textView.isAutomaticDashSubstitutionEnabled = false
+        textView.isAutomaticTextReplacementEnabled = false
+        textView.isAutomaticSpellingCorrectionEnabled = false
 
         // Disable word wrap for XML (horizontal scroll)
         textView.isHorizontallyResizable = true
         textView.textContainer?.widthTracksTextView = false
         textView.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
 
+        // Disable layout during initial load
+        textView.layoutManager?.allowsNonContiguousLayout = true
+
+        context.coordinator.textView = textView
+
         return scrollView
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        let textView = scrollView.documentView as! NSTextView
-        if textView.string != text {
-            textView.string = text
-        }
+        guard context.coordinator.currentText != text else { return }
+        context.coordinator.currentText = text
+
+        let textView = context.coordinator.textView!
+        // Set text content with layout temporarily disabled to avoid stalling
+        textView.textStorage?.beginEditing()
+        textView.textStorage?.setAttributedString(NSAttributedString(
+            string: text,
+            attributes: [
+                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
+                .foregroundColor: NSColor.textColor
+            ]
+        ))
+        textView.textStorage?.endEditing()
+    }
+
+    class Coordinator {
+        var textView: NSTextView?
+        var currentText: String = ""
     }
 }
 
