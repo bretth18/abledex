@@ -58,6 +58,12 @@ jobs:
         # Clean up cert files
         rm -f /tmp/app_cert.p12 /tmp/installer_cert.p12
 
+        # Debug: list all identities in keychain
+        echo "=== All identities ==="
+        security find-identity -v "$KEYCHAIN_PATH"
+        echo "=== Codesigning identities ==="
+        security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
     - name: Archive App
       run: |
         xcodebuild -scheme abledex \
