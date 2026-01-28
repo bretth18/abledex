@@ -21,33 +21,153 @@ final class AppState {
 
     // MARK: - State
 
-    var projects: [ProjectRecord] = []
+    var projects: [ProjectRecord] = [] {
+        didSet {
+            // Skip if this is the initial load (caches already populated)
+            guard !isInitialLoad else { return }
+            recomputeCachedCounts()
+            recomputeFilteredProjects()
+        }
+    }
+    private var isInitialLoad = true
     var locations: [LocationRecord] = []
     var selectedProjectIDs: Set<UUID> = []
-    var searchQuery: String = ""
+    var searchQuery: String = "" {
+        didSet {
+            // Debounce search to avoid filtering on every keystroke
+            searchDebounceTask?.cancel()
+            searchDebounceTask = Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(150))
+                if !Task.isCancelled {
+                    recomputeFilteredProjects()
+                }
+            }
+        }
+    }
+
+    // MARK: - Cached Data (for sidebar performance)
+    private(set) var statusCounts: [CompletionStatus: Int] = [:]
+    private(set) var colorLabelCounts: [ColorLabel: Int] = [:]
+    private(set) var volumeCounts: [String: Int] = [:]
+    private(set) var tagCounts: [String: Int] = [:]
+    private(set) var pluginCounts: [String: Int] = [:]
+    private(set) var keyCounts: [String: Int] = [:]
+    private(set) var folderCounts: [String: Int] = [:]
+
+    // Cached unique values (avoid recomputing on every render)
+    private(set) var cachedUniqueVolumes: [String] = []
+    private(set) var cachedUniqueTags: [String] = []
+    private(set) var cachedUniquePlugins: [String] = []
+    private(set) var cachedUniqueKeys: [String] = []
+    private(set) var cachedUniqueFolders: [String] = []
+    private(set) var cachedFoldersWithMultipleVersions: [String] = []
+    private(set) var cachedProjectsByFolder: [String: [ProjectRecord]] = [:]
+    private(set) var cachedDuplicateGroups: [DuplicateGroup] = []
+    private(set) var cachedDuplicatesCount: Int = 0
+
+    private func recomputeCachedCounts() {
+        var newStatusCounts: [CompletionStatus: Int] = [:]
+        var newColorLabelCounts: [ColorLabel: Int] = [:]
+        var newVolumeCounts: [String: Int] = [:]
+        var newTagCounts: [String: Int] = [:]
+        var newPluginCounts: [String: Int] = [:]
+        var newKeyCounts: [String: Int] = [:]
+        var newFolderCounts: [String: Int] = [:]
+
+        for project in projects {
+            // Status
+            newStatusCounts[project.completionStatus, default: 0] += 1
+
+            // Color label
+            newColorLabelCounts[project.colorLabel, default: 0] += 1
+
+            // Volume
+            newVolumeCounts[project.sourceVolume, default: 0] += 1
+
+            // Folder
+            newFolderCounts[project.projectFolderName, default: 0] += 1
+
+            // Tags
+            for tag in project.userTags {
+                newTagCounts[tag, default: 0] += 1
+            }
+
+            // Plugins
+            for plugin in project.plugins {
+                newPluginCounts[plugin, default: 0] += 1
+            }
+
+            // Keys
+            for key in project.musicalKeys {
+                newKeyCounts[key, default: 0] += 1
+            }
+        }
+
+        statusCounts = newStatusCounts
+        colorLabelCounts = newColorLabelCounts
+        volumeCounts = newVolumeCounts
+        tagCounts = newTagCounts
+        pluginCounts = newPluginCounts
+        keyCounts = newKeyCounts
+        folderCounts = newFolderCounts
+
+        // Compute unique sorted arrays from the count dictionaries
+        cachedUniqueVolumes = newVolumeCounts.keys.sorted()
+        cachedUniqueTags = newTagCounts.keys.sorted()
+        cachedUniquePlugins = newPluginCounts.keys.sorted()
+        cachedUniqueKeys = newKeyCounts.keys.sorted()
+        cachedUniqueFolders = newFolderCounts.keys.sorted()
+        cachedFoldersWithMultipleVersions = newFolderCounts.filter { $0.value > 1 }.keys.sorted()
+        cachedProjectsByFolder = Dictionary(grouping: projects, by: { $0.projectFolderName })
+
+        // Recompute duplicates in background (O(n²) operation)
+        let projectsSnapshot = self.projects
+        Task.detached(priority: .utility) {
+            let groups = await DuplicateDetectionService().findDuplicates(in: projectsSnapshot)
+            let count = Set(groups.flatMap { $0.projects.map { $0.id } }).count
+            await MainActor.run { [groups, count] in
+                // Update state on the main actor
+                // Accessing self here is safe as this closure executes on MainActor
+                // and we didn't capture self in the detached task
+                let update: @MainActor () -> Void = {
+                    self.cachedDuplicateGroups = groups
+                    self.cachedDuplicatesCount = count
+                }
+                update()
+            }
+        }
+    }
 
     var isScanning: Bool = false
     var scanProgress: ScanProgress?
 
     // Sorting
-    var sortColumn: SortColumn = .modifiedDate
-    var sortAscending: Bool = false
+    var sortColumn: SortColumn = .modifiedDate { didSet { recomputeFilteredProjects() } }
+    var sortAscending: Bool = false { didSet { recomputeFilteredProjects() } }
 
-    // Filtering
-    var selectedFilter: ProjectFilter = .all
-    var selectedVolumeFilter: String?
-    var selectedStatusFilter: CompletionStatus?
-    var selectedColorLabelFilter: ColorLabel?
-    var selectedTagFilter: String?
-    var selectedPluginFilter: String?
-    var selectedKeyFilter: String?
-    var selectedFolderFilter: String?
-    var showFavoritesOnly: Bool = false
-    var showDuplicatesOnly: Bool = false
+    // Filtering (with didSet to trigger recomputation)
+    var selectedFilter: ProjectFilter = .all { didSet { recomputeFilteredProjects() } }
+    var selectedVolumeFilter: String? { didSet { recomputeFilteredProjects() } }
+    var selectedStatusFilter: CompletionStatus? { didSet { recomputeFilteredProjects() } }
+    var selectedColorLabelFilter: ColorLabel? { didSet { recomputeFilteredProjects() } }
+    var selectedTagFilter: String? { didSet { recomputeFilteredProjects() } }
+    var selectedPluginFilter: String? { didSet { recomputeFilteredProjects() } }
+    var selectedKeyFilter: String? { didSet { recomputeFilteredProjects() } }
+    var selectedFolderFilter: String? { didSet { recomputeFilteredProjects() } }
+    var showFavoritesOnly: Bool = false { didSet { recomputeFilteredProjects() } }
+    var showDuplicatesOnly: Bool = false { didSet { recomputeFilteredProjects() } }
+
+    // Cached filtered projects
+    private(set) var cachedFilteredProjects: [ProjectRecord] = []
+    private var searchDebounceTask: Task<Void, Never>?
 
     // MARK: - Computed Properties
 
     var filteredProjects: [ProjectRecord] {
+        cachedFilteredProjects
+    }
+
+    private func recomputeFilteredProjects() {
         var result = projects
 
         // Apply search filter (includes name, plugins, and tags)
@@ -154,7 +274,7 @@ final class AppState {
             return sortAscending ? comparison : !comparison
         }
 
-        return result
+        cachedFilteredProjects = result
     }
 
     var selectedProject: ProjectRecord? {
@@ -168,27 +288,27 @@ final class AppState {
     }
 
     var uniqueVolumes: [String] {
-        Array(Set(projects.map { $0.sourceVolume })).sorted()
+        cachedUniqueVolumes
     }
 
     var uniqueTags: [String] {
-        Array(Set(projects.flatMap { $0.userTags })).sorted()
+        cachedUniqueTags
     }
 
     var uniquePlugins: [String] {
-        Array(Set(projects.flatMap { $0.plugins })).sorted()
+        cachedUniquePlugins
     }
 
     var uniqueKeys: [String] {
-        Array(Set(projects.flatMap { $0.musicalKeys })).sorted()
+        cachedUniqueKeys
     }
 
     var uniqueFolders: [String] {
-        Array(Set(projects.map { $0.projectFolderName })).sorted()
+        cachedUniqueFolders
     }
 
     var projectsByFolder: [String: [ProjectRecord]] {
-        Dictionary(grouping: projects, by: { $0.projectFolderName })
+        cachedProjectsByFolder
     }
 
     func versionsInSameFolder(as project: ProjectRecord) -> [ProjectRecord] {
@@ -197,11 +317,11 @@ final class AppState {
     }
 
     var duplicateGroups: [DuplicateGroup] {
-        duplicateService.findDuplicates(in: projects)
+        cachedDuplicateGroups
     }
 
     var duplicatesCount: Int {
-        Set(duplicateGroups.flatMap { $0.projects.map { $0.id } }).count
+        cachedDuplicatesCount
     }
 
     func hasDuplicates(_ project: ProjectRecord) -> Bool {
@@ -238,8 +358,38 @@ final class AppState {
 
     func loadData() async {
         do {
-            projects = try await database.fetchAllProjects()
-            locations = try await database.fetchAllLocations()
+            // Fetch from database (off main thread via async)
+            let fetchedProjects = try await database.fetchAllProjects()
+            let fetchedLocations = try await database.fetchAllLocations()
+
+            // Compute caches off main thread
+            let caches = await Task.detached(priority: .userInitiated) {
+                self.computeCachesOffMainThread(for: fetchedProjects)
+            }.value
+
+            // Apply to state (on main thread, but just assignments)
+            locations = fetchedLocations
+            statusCounts = caches.statusCounts
+            colorLabelCounts = caches.colorLabelCounts
+            volumeCounts = caches.volumeCounts
+            tagCounts = caches.tagCounts
+            pluginCounts = caches.pluginCounts
+            keyCounts = caches.keyCounts
+            folderCounts = caches.folderCounts
+            cachedUniqueVolumes = caches.uniqueVolumes
+            cachedUniqueTags = caches.uniqueTags
+            cachedUniquePlugins = caches.uniquePlugins
+            cachedUniqueKeys = caches.uniqueKeys
+            cachedUniqueFolders = caches.uniqueFolders
+            cachedFoldersWithMultipleVersions = caches.foldersWithMultipleVersions
+            cachedProjectsByFolder = caches.projectsByFolder
+            cachedFilteredProjects = caches.filteredProjects
+            cachedDuplicateGroups = caches.duplicateGroups
+            cachedDuplicatesCount = caches.duplicatesCount
+
+            // Set projects (didSet skipped due to isInitialLoad flag)
+            projects = fetchedProjects
+            isInitialLoad = false
 
             if locations.isEmpty {
                 await initializeDefaultLocations()
@@ -247,6 +397,75 @@ final class AppState {
         } catch {
             print("Failed to load data: \(error)")
         }
+    }
+
+    private struct ComputedCaches: Sendable {
+        var statusCounts: [CompletionStatus: Int]
+        var colorLabelCounts: [ColorLabel: Int]
+        var volumeCounts: [String: Int]
+        var tagCounts: [String: Int]
+        var pluginCounts: [String: Int]
+        var keyCounts: [String: Int]
+        var folderCounts: [String: Int]
+        var uniqueVolumes: [String]
+        var uniqueTags: [String]
+        var uniquePlugins: [String]
+        var uniqueKeys: [String]
+        var uniqueFolders: [String]
+        var foldersWithMultipleVersions: [String]
+        var projectsByFolder: [String: [ProjectRecord]]
+        var filteredProjects: [ProjectRecord]
+        var duplicateGroups: [DuplicateGroup]
+        var duplicatesCount: Int
+    }
+
+    private nonisolated func computeCachesOffMainThread(for projects: [ProjectRecord]) -> ComputedCaches {
+        var statusCounts: [CompletionStatus: Int] = [:]
+        var colorLabelCounts: [ColorLabel: Int] = [:]
+        var volumeCounts: [String: Int] = [:]
+        var tagCounts: [String: Int] = [:]
+        var pluginCounts: [String: Int] = [:]
+        var keyCounts: [String: Int] = [:]
+        var folderCounts: [String: Int] = [:]
+
+        for project in projects {
+            statusCounts[project.completionStatus, default: 0] += 1
+            colorLabelCounts[project.colorLabel, default: 0] += 1
+            volumeCounts[project.sourceVolume, default: 0] += 1
+            folderCounts[project.projectFolderName, default: 0] += 1
+            for tag in project.userTags { tagCounts[tag, default: 0] += 1 }
+            for plugin in project.plugins { pluginCounts[plugin, default: 0] += 1 }
+            for key in project.musicalKeys { keyCounts[key, default: 0] += 1 }
+        }
+
+        // Sort projects by modified date descending (default sort)
+        let sortedProjects = projects.sorted {
+            ($0.modifiedDate ?? $0.filesystemModifiedDate) > ($1.modifiedDate ?? $1.filesystemModifiedDate)
+        }
+
+        // Compute duplicates (O(n²) but done off main thread)
+        let duplicateGroups = DuplicateDetectionService().findDuplicates(in: projects)
+        let duplicatesCount = Set(duplicateGroups.flatMap { $0.projects.map { $0.id } }).count
+
+        return ComputedCaches(
+            statusCounts: statusCounts,
+            colorLabelCounts: colorLabelCounts,
+            volumeCounts: volumeCounts,
+            tagCounts: tagCounts,
+            pluginCounts: pluginCounts,
+            keyCounts: keyCounts,
+            folderCounts: folderCounts,
+            uniqueVolumes: volumeCounts.keys.sorted(),
+            uniqueTags: tagCounts.keys.sorted(),
+            uniquePlugins: pluginCounts.keys.sorted(),
+            uniqueKeys: keyCounts.keys.sorted(),
+            uniqueFolders: folderCounts.keys.sorted(),
+            foldersWithMultipleVersions: folderCounts.filter { $0.value > 1 }.keys.sorted(),
+            projectsByFolder: Dictionary(grouping: projects, by: { $0.projectFolderName }),
+            filteredProjects: sortedProjects,
+            duplicateGroups: duplicateGroups,
+            duplicatesCount: duplicatesCount
+        )
     }
 
     private func initializeDefaultLocations() async {
@@ -271,14 +490,28 @@ final class AppState {
         isScanning = true
         scanProgress = .starting
 
-        do {
-            _ = try await scanner.scanAllLocations { [weak self] progress in
-                Task { @MainActor [weak self] in
-                    self?.scanProgress = progress
+        // Run scan in detached task to avoid blocking MainActor
+        let scanner = self.scanner
+        let result: Result<Int, Error> = await Task.detached(priority: .userInitiated) {
+            do {
+                let count = try await scanner.scanAllLocations { progress in
+                    Task { @MainActor in
+                        // Use weak reference pattern inline
+                        await MainActor.run { [weak self] in
+                            self?.scanProgress = progress
+                        }
+                    }
                 }
+                return .success(count)
+            } catch {
+                return .failure(error)
             }
+        }.value
+
+        switch result {
+        case .success:
             await loadData()
-        } catch {
+        case .failure(let error):
             print("Scan failed: \(error)")
             scanProgress = .failed(error)
         }
@@ -492,7 +725,7 @@ final class AppState {
     }
 
     func colorLabelCount(for label: ColorLabel) -> Int {
-        projects.filter { $0.colorLabel == label }.count
+        colorLabelCounts[label] ?? 0
     }
 
     func clearAllFilters() {

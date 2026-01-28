@@ -20,7 +20,8 @@ struct SidebarView: View {
         List(selection: $state.selectedFilter) {
             
             HStack(alignment: .center) {
-                Image(.logo)
+                Image(.logopdf)
+                    .renderingMode(.template)
                     .resizable()
                     .scaledToFit()
                     .frame(width: 32, height: 32)
@@ -531,10 +532,7 @@ struct SidebarView: View {
     }
 
     private var foldersWithMultipleVersions: [String] {
-        appState.projectsByFolder
-            .filter { $0.value.count > 1 }
-            .keys
-            .sorted()
+        appState.cachedFoldersWithMultipleVersions
     }
 
     // MARK: - Helper Functions
@@ -555,32 +553,67 @@ struct SidebarView: View {
     @ViewBuilder
     private var scanProgressView: some View {
         if let progress = appState.scanProgress {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
                 switch progress {
                 case .starting:
-                    Text("Starting scan...")
-                        .font(.caption)
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                        Text("Preparing scan...")
+                            .font(.caption)
+                    }
                 case .discovering(let location):
-                    Text("Discovering in \(location)...")
-                        .font(.caption)
+                    HStack(spacing: 6) {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                        Text("Finding projects in \(location)...")
+                            .font(.caption)
+                            .lineLimit(1)
+                    }
                 case .parsing(let current, let total, let name):
-                    Text("Parsing: \(name)")
-                        .font(.caption)
-                        .lineLimit(1)
-                    ProgressView(value: Double(current), total: Double(total))
-                    Text("\(current) of \(total)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Image(systemName: "doc.text.magnifyingglass")
+                                .foregroundStyle(.secondary)
+                                .font(.caption)
+                            Text(name)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .lineLimit(1)
+                        }
+                        ProgressView(value: Double(current), total: Double(total))
+                            .animation(.easeInOut(duration: 0.2), value: current)
+                        HStack {
+                            Text("\(current) of \(total) projects")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                            Text("\(Int((Double(current) / Double(total)) * 100))%")
+                                .font(.caption2)
+                                .fontWeight(.medium)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                 case .completed(let count, let duration):
-                    Text("Found \(count) projects in \(String(format: "%.1f", duration))s")
-                        .font(.caption)
+                    HStack(spacing: 6) {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                        Text("Found \(count) projects in \(String(format: "%.1f", duration))s")
+                            .font(.caption)
+                    }
                 case .failed(let error):
-                    Text("Error: \(error.localizedDescription)")
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                    HStack(spacing: 6) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                        Text(error.localizedDescription)
+                            .font(.caption)
+                            .foregroundStyle(.red)
+                            .lineLimit(2)
+                    }
                 }
             }
             .padding(.horizontal)
+            .animation(.easeInOut(duration: 0.15), value: appState.scanProgress?.description)
         }
     }
 
@@ -616,23 +649,23 @@ struct SidebarView: View {
     }
 
     private func projectCount(for volume: String) -> Int {
-        appState.projects.filter { $0.sourceVolume == volume }.count
+        appState.volumeCounts[volume] ?? 0
     }
 
     private func tagCount(for tag: String) -> Int {
-        appState.projects.filter { $0.userTags.contains(tag) }.count
+        appState.tagCounts[tag] ?? 0
     }
 
     private func pluginCount(for plugin: String) -> Int {
-        appState.projects.filter { $0.plugins.contains(plugin) }.count
+        appState.pluginCounts[plugin] ?? 0
     }
 
     private func keyCount(for key: String) -> Int {
-        appState.projects.filter { $0.musicalKeys.contains(key) }.count
+        appState.keyCounts[key] ?? 0
     }
 
     private func folderCount(for folder: String) -> Int {
-        appState.projectsByFolder[folder]?.count ?? 0
+        appState.folderCounts[folder] ?? 0
     }
 
     private func displayKey(_ key: String) -> String {
@@ -651,7 +684,7 @@ struct SidebarView: View {
     }
 
     private func statusCount(for status: CompletionStatus) -> Int {
-        appState.projects.filter { $0.completionStatus == status }.count
+        appState.statusCounts[status] ?? 0
     }
 
     private func statusColor(for status: CompletionStatus) -> Color {

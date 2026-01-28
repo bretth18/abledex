@@ -185,17 +185,52 @@ struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, Persista
     }
 }
 
+// MARK: - JSON Decoding Cache
+
+/// Thread-safe cache for decoded JSON arrays to avoid repeated decoding
+private final class JSONDecodeCache: @unchecked Sendable {
+    static let shared = JSONDecodeCache()
+
+    private var cache: [String: [String]] = [:]
+    private let lock = NSLock()
+
+    func get(_ json: String?) -> [String]? {
+        guard let json = json else { return nil }
+        lock.lock()
+        defer { lock.unlock() }
+        return cache[json]
+    }
+
+    func set(_ json: String, value: [String]) {
+        lock.lock()
+        defer { lock.unlock() }
+        cache[json] = value
+    }
+
+    func decode(_ json: String?) -> [String] {
+        guard let json = json else { return [] }
+
+        // Check cache first
+        if let cached = get(json) {
+            return cached
+        }
+
+        // Decode and cache
+        guard let data = json.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String].self, from: data) else {
+            return []
+        }
+        set(json, value: decoded)
+        return decoded
+    }
+}
+
 // MARK: - Convenience accessors for JSON fields
 
 extension ProjectRecord {
     var samplePaths: [String] {
         get {
-            guard let json = samplePathsJSON,
-                  let data = json.data(using: .utf8),
-                  let paths = try? JSONDecoder().decode([String].self, from: data) else {
-                return []
-            }
-            return paths
+            JSONDecodeCache.shared.decode(samplePathsJSON)
         }
         set {
             if let data = try? JSONEncoder().encode(newValue),
@@ -207,12 +242,7 @@ extension ProjectRecord {
 
     var plugins: [String] {
         get {
-            guard let json = pluginsJSON,
-                  let data = json.data(using: .utf8),
-                  let plugins = try? JSONDecoder().decode([String].self, from: data) else {
-                return []
-            }
-            return plugins
+            JSONDecodeCache.shared.decode(pluginsJSON)
         }
         set {
             if let data = try? JSONEncoder().encode(newValue),
@@ -224,12 +254,7 @@ extension ProjectRecord {
 
     var userTags: [String] {
         get {
-            guard let json = userTagsJSON,
-                  let data = json.data(using: .utf8),
-                  let tags = try? JSONDecoder().decode([String].self, from: data) else {
-                return []
-            }
-            return tags
+            JSONDecodeCache.shared.decode(userTagsJSON)
         }
         set {
             if let data = try? JSONEncoder().encode(newValue),
@@ -241,12 +266,7 @@ extension ProjectRecord {
 
     var musicalKeys: [String] {
         get {
-            guard let json = musicalKeysJSON,
-                  let data = json.data(using: .utf8),
-                  let keys = try? JSONDecoder().decode([String].self, from: data) else {
-                return []
-            }
-            return keys
+            JSONDecodeCache.shared.decode(musicalKeysJSON)
         }
         set {
             if let data = try? JSONEncoder().encode(newValue),
@@ -264,7 +284,11 @@ extension ProjectRecord {
     }
 
     var projectFolderName: String {
-        URL(fileURLWithPath: folderPath).lastPathComponent
+        // Use string manipulation instead of URL for performance
+        if let lastSlash = folderPath.lastIndex(of: "/") {
+            return String(folderPath[folderPath.index(after: lastSlash)...])
+        }
+        return folderPath
     }
 
     var formattedDuration: String? {

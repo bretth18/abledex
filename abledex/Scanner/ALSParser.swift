@@ -89,6 +89,22 @@ struct ALSParser: Sendable {
         return parseXML(xmlString)
     }
 
+    /// Returns the raw decompressed XML string from an ALS file
+    nonisolated func getRawXML(alsFilePath: URL) throws -> String {
+        guard FileManager.default.fileExists(atPath: alsFilePath.path) else {
+            throw ALSParserError.fileNotFound
+        }
+
+        let compressedData = try Data(contentsOf: alsFilePath)
+        let xmlData = try decompressGzip(data: compressedData)
+
+        guard let xmlString = String(data: xmlData, encoding: .utf8) else {
+            throw ALSParserError.invalidXML
+        }
+
+        return xmlString
+    }
+
     private nonisolated func decompressGzip(data: Data) throws -> Data {
         guard data.count > 10 else {
             throw ALSParserError.decompressionFailed
@@ -161,11 +177,9 @@ struct ALSParser: Sendable {
         // Parse Ableton version - look in first 2000 chars for efficiency
         let headerSection = String(xmlString.prefix(2000))
 
-        if let range = headerSection.range(of: #"Creator="Ableton Live ([^"]+)""#, options: .regularExpression) {
-            let match = headerSection[range]
-            if let versionRange = match.range(of: #"(?<=Creator="Ableton Live )[^"]+"#, options: .regularExpression) {
-                result.abletonVersion = String(match[versionRange])
-            }
+        if let creatorStart = headerSection.range(of: "Creator=\"Ableton Live "),
+           let creatorEnd = headerSection.range(of: "\"", range: creatorStart.upperBound..<headerSection.endIndex) {
+            result.abletonVersion = String(headerSection[creatorStart.upperBound..<creatorEnd.lowerBound])
         }
 
         // Parse BPM - extract from Tempo block
@@ -175,10 +189,10 @@ struct ALSParser: Sendable {
         result.timeSignatureNumerator = extractFirstInt(from: xmlString, pattern: #"<TimeSignature>[^<]*<[^>]*Numerator Value="(\d+)""#) ?? 4
         result.timeSignatureDenominator = extractFirstInt(from: xmlString, pattern: #"<TimeSignature>[^<]*<[^>]*Denominator Value="(\d+)""#) ?? 4
 
-        // Count tracks - use simple string counting for speed
-        result.audioTrackCount = xmlString.components(separatedBy: "<AudioTrack Id=").count - 1
-        result.midiTrackCount = xmlString.components(separatedBy: "<MidiTrack Id=").count - 1
-        result.returnTrackCount = xmlString.components(separatedBy: "<ReturnTrack Id=").count - 1
+        // Count tracks - fast counting without creating arrays
+        result.audioTrackCount = countOccurrences(of: "<AudioTrack Id=", in: xmlString)
+        result.midiTrackCount = countOccurrences(of: "<MidiTrack Id=", in: xmlString)
+        result.returnTrackCount = countOccurrences(of: "<ReturnTrack Id=", in: xmlString)
 
         // Parse arrangement length
         if let beats = extractFirstDouble(from: xmlString, pattern: #"<CurrentEnd Value="([\d.]+)""#),
@@ -198,6 +212,17 @@ struct ALSParser: Sendable {
         return result
     }
 
+    /// Fast occurrence counting without creating intermediate arrays
+    private nonisolated func countOccurrences(of needle: String, in haystack: String) -> Int {
+        var count = 0
+        var searchRange = haystack.startIndex..<haystack.endIndex
+        while let foundRange = haystack.range(of: needle, range: searchRange) {
+            count += 1
+            searchRange = foundRange.upperBound..<haystack.endIndex
+        }
+        return count
+    }
+
     private nonisolated func extractBPM(from xmlString: String) -> Double? {
         // Find the Tempo block and extract the Manual value
         // The structure is: <Tempo>...<Manual Value="120" />...</Tempo>
@@ -206,22 +231,15 @@ struct ALSParser: Sendable {
             return nil
         }
 
-        let tempoBlock = String(xmlString[tempoStart.lowerBound..<tempoEnd.upperBound])
+        let tempoBlock = xmlString[tempoStart.lowerBound..<tempoEnd.upperBound]
 
-        // Look for <Manual Value="XXX" /> within the Tempo block
-        let pattern = #"<Manual Value="([\d.]+)""#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
+        // Fast string-based extraction without regex
+        guard let manualStart = tempoBlock.range(of: "<Manual Value=\""),
+              let manualEnd = tempoBlock.range(of: "\"", range: manualStart.upperBound..<tempoBlock.endIndex) else {
             return nil
         }
 
-        let range = NSRange(tempoBlock.startIndex..., in: tempoBlock)
-        guard let match = regex.firstMatch(in: tempoBlock, range: range),
-              match.numberOfRanges > 1,
-              let valueRange = Range(match.range(at: 1), in: tempoBlock) else {
-            return nil
-        }
-
-        return Double(tempoBlock[valueRange])
+        return Double(tempoBlock[manualStart.upperBound..<manualEnd.lowerBound])
     }
 
     private nonisolated func extractFirstDouble(from string: String, pattern: String) -> Double? {

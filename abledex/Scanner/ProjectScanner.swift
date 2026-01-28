@@ -14,6 +14,21 @@ enum ScanProgress: Sendable {
     case parsing(current: Int, total: Int, projectName: String)
     case completed(projectCount: Int, duration: TimeInterval)
     case failed(Error)
+
+    var description: String {
+        switch self {
+        case .starting:
+            return "starting"
+        case .discovering(let location):
+            return "discovering-\(location)"
+        case .parsing(let current, _, let name):
+            return "parsing-\(current)-\(name)"
+        case .completed(let count, _):
+            return "completed-\(count)"
+        case .failed:
+            return "failed"
+        }
+    }
 }
 
 final class ProjectScanner: Sendable {
@@ -31,11 +46,20 @@ final class ProjectScanner: Sendable {
         progress(.starting)
 
         let locations = try await database.fetchEnabledLocations()
-        var totalProjects = 0
 
-        for location in locations {
-            let count = try await scanLocation(location, progress: progress)
-            totalProjects += count
+        // Scan all locations in parallel
+        let totalProjects = try await withThrowingTaskGroup(of: Int.self) { group in
+            for location in locations {
+                group.addTask {
+                    try await self.scanLocation(location, progress: progress)
+                }
+            }
+
+            var total = 0
+            for try await count in group {
+                total += count
+            }
+            return total
         }
 
         let duration = Date().timeIntervalSince(startTime)
@@ -67,16 +91,24 @@ final class ProjectScanner: Sendable {
 
         // Parse in batches to avoid memory pressure
         var processed = 0
-        let batchSize = 10
+        let batchSize = 50
+        var pendingSave: Task<Void, Error>? = nil
 
         for batch in stride(from: 0, to: total, by: batchSize) {
             let end = min(batch + batchSize, total)
             let batchProjects = Array(discoveredProjects[batch..<end])
 
-            // Parse batch concurrently
+            // Parse batch concurrently, skipping unchanged files
             let records = await withTaskGroup(of: ProjectRecord?.self) { group in
                 for discovered in batchProjects {
                     let existing = existingProjects[discovered.alsFilePath.path]
+
+                    // Skip files that haven't changed since last index
+                    if let existing = existing,
+                       abs(existing.filesystemModifiedDate.timeIntervalSince(discovered.modifiedDate)) < 1.0 {
+                        continue
+                    }
+
                     group.addTask {
                         self.parseProject(discovered, existing: existing)
                     }
@@ -91,9 +123,15 @@ final class ProjectScanner: Sendable {
                 return results
             }
 
-            // Save batch to database
+            // Wait for previous batch save before starting next one
+            try await pendingSave?.value
+
+            // Pipeline: save this batch while the next batch parses
             if !records.isEmpty {
-                try await database.saveProjects(records)
+                let db = self.database
+                pendingSave = Task {
+                    try await db.saveProjects(records)
+                }
             }
 
             processed += batchProjects.count
@@ -101,6 +139,9 @@ final class ProjectScanner: Sendable {
                 progress(.parsing(current: processed, total: total, projectName: lastProject.projectName))
             }
         }
+
+        // Wait for final batch save
+        try await pendingSave?.value
 
         try await database.updateLocationProjectCount(id: location.id, count: processed)
         return processed
@@ -160,8 +201,35 @@ final class ProjectScanner: Sendable {
     }
 
     private nonisolated func calculateFileHash(url: URL) -> String? {
-        guard let data = try? Data(contentsOf: url) else { return nil }
-        let digest = Insecure.MD5.hash(data: data)
+        // Use file size + first/last 64KB for fast hashing instead of reading entire file
+        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        defer { try? handle.close() }
+
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let fileSize = attrs[.size] as? UInt64 else { return nil }
+
+        let sampleSize = min(65536, Int(fileSize)) // 64KB or less
+
+        var hasher = Insecure.MD5()
+
+        // Hash file size
+        var size = fileSize
+        withUnsafeBytes(of: &size) { hasher.update(bufferPointer: $0) }
+
+        // Hash first chunk
+        if let firstChunk = try? handle.read(upToCount: sampleSize) {
+            hasher.update(data: firstChunk)
+        }
+
+        // Hash last chunk if file is large enough
+        if fileSize > UInt64(sampleSize * 2) {
+            try? handle.seek(toOffset: fileSize - UInt64(sampleSize))
+            if let lastChunk = try? handle.read(upToCount: sampleSize) {
+                hasher.update(data: lastChunk)
+            }
+        }
+
+        let digest = hasher.finalize()
         return digest.map { String(format: "%02hhx", $0) }.joined()
     }
 }
