@@ -89,6 +89,22 @@ struct ALSParser: Sendable {
         return parseXML(xmlString)
     }
 
+    /// Returns the raw decompressed XML string from an ALS file
+    nonisolated func getRawXML(alsFilePath: URL) throws -> String {
+        guard FileManager.default.fileExists(atPath: alsFilePath.path) else {
+            throw ALSParserError.fileNotFound
+        }
+
+        let compressedData = try Data(contentsOf: alsFilePath)
+        let xmlData = try decompressGzip(data: compressedData)
+
+        guard let xmlString = String(data: xmlData, encoding: .utf8) else {
+            throw ALSParserError.invalidXML
+        }
+
+        return xmlString
+    }
+
     private nonisolated func decompressGzip(data: Data) throws -> Data {
         guard data.count > 10 else {
             throw ALSParserError.decompressionFailed
