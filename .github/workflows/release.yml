@@ -66,7 +66,9 @@ jobs:
           -archivePath $PWD/build/abledex.xcarchive \
           -configuration Release \
           archive \
+          CODE_SIGN_STYLE=Manual \
           CODE_SIGN_IDENTITY="Developer ID Application: Brett Henderson (94XUGF9CU7)" \
+          DEVELOPMENT_TEAM=94XUGF9CU7 \
           OTHER_CODE_SIGN_FLAGS="--keychain $KEYCHAIN_PATH"
 
     - name: Export App
