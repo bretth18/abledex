@@ -13,11 +13,13 @@ jobs:
     runs-on: macos-26
 
     env:
-      KEYCHAIN_PATH: ${{ runner.temp }}/build.keychain-db
       KEYCHAIN_PASSWORD: ${{ github.run_id }}
 
     steps:
     - uses: actions/checkout@v4
+
+    - name: Set keychain path
+      run: echo "KEYCHAIN_PATH=$RUNNER_TEMP/build.keychain-db" >> "$GITHUB_ENV"
 
     - name: Install certificates
       env:
