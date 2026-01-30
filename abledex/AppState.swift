@@ -485,7 +485,7 @@ final class AppState {
 
     // MARK: - Scanning
 
-    func startScan() async {
+    func startScan(forceReparse: Bool = false) async {
         guard !isScanning else { return }
         isScanning = true
         scanProgress = .starting
@@ -494,7 +494,7 @@ final class AppState {
         let scanner = self.scanner
         let result: Result<Int, Error> = await Task.detached(priority: .userInitiated) {
             do {
-                let count = try await scanner.scanAllLocations { progress in
+                let count = try await scanner.scanAllLocations(forceReparse: forceReparse) { progress in
                     Task { @MainActor in
                         // Use weak reference pattern inline
                         await MainActor.run { [weak self] in
@@ -516,6 +516,104 @@ final class AppState {
             scanProgress = .failed(error)
         }
 
+        isScanning = false
+    }
+
+    func startLocationScan(_ location: LocationRecord) async {
+        guard !isScanning else { return }
+        isScanning = true
+        scanProgress = .starting
+
+        let scanner = self.scanner
+        let result: Result<Int, Error> = await Task.detached(priority: .userInitiated) {
+            do {
+                let count = try await scanner.scanLocation(location, forceReparse: true) { progress in
+                    Task { @MainActor in
+                        await MainActor.run { [weak self] in
+                            self?.scanProgress = progress
+                        }
+                    }
+                }
+                return .success(count)
+            } catch {
+                return .failure(error)
+            }
+        }.value
+
+        switch result {
+        case .success:
+            await loadData()
+        case .failure(let error):
+            print("Location scan failed: \(error)")
+            scanProgress = .failed(error)
+        }
+
+        isScanning = false
+    }
+
+    func rescanProject(_ project: ProjectRecord) async {
+        guard !isScanning else { return }
+        isScanning = true
+        scanProgress = .parsing(current: 1, total: 1, projectName: project.name)
+
+        let scanner = self.scanner
+        let alsPath = project.alsFilePath
+        let result: Result<ProjectRecord?, Error> = await Task.detached(priority: .userInitiated) {
+            do {
+                let record = try await scanner.scanSingleProject(alsFilePath: alsPath)
+                return .success(record)
+            } catch {
+                return .failure(error)
+            }
+        }.value
+
+        switch result {
+        case .success(let record):
+            if let record = record, let index = projects.firstIndex(where: { $0.id == record.id }) {
+                projects[index] = record
+            } else {
+                await loadData()
+            }
+            scanProgress = .completed(projectCount: 1, duration: 0)
+        case .failure(let error):
+            print("Project rescan failed: \(error)")
+            scanProgress = .failed(error)
+        }
+
+        isScanning = false
+    }
+
+    func rescanProjects(_ projectsToRescan: [ProjectRecord]) async {
+        guard !isScanning else { return }
+        isScanning = true
+        scanProgress = .starting
+
+        let scanner = self.scanner
+        let total = projectsToRescan.count
+
+        var scannedCount = 0
+        for project in projectsToRescan {
+            scannedCount += 1
+            scanProgress = .parsing(current: scannedCount, total: total, projectName: project.name)
+
+            let alsPath = project.alsFilePath
+            let result: Result<ProjectRecord?, Error> = await Task.detached(priority: .userInitiated) {
+                do {
+                    let record = try await scanner.scanSingleProject(alsFilePath: alsPath)
+                    return .success(record)
+                } catch {
+                    return .failure(error)
+                }
+            }.value
+
+            if case .success(let record) = result,
+               let record = record,
+               let index = projects.firstIndex(where: { $0.id == record.id }) {
+                projects[index] = record
+            }
+        }
+
+        scanProgress = .completed(projectCount: total, duration: 0)
         isScanning = false
     }
 

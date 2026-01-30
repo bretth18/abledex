@@ -336,6 +336,11 @@ struct ProjectTableView: View {
                 }
             }
 
+            Button("Re-scan \(appState.selectedProjectIDs.count) Projects") {
+                Task {
+                    await appState.rescanProjects(appState.selectedProjects)
+                }
+            }
             Divider()
             Button("Remove \(appState.selectedProjectIDs.count) Projects from Library", role: .destructive) {
                 showDeleteConfirmation = true
@@ -379,6 +384,11 @@ struct ProjectTableView: View {
                 }
             }
 
+            Button("Re-scan Project") {
+                Task {
+                    await appState.rescanProject(project)
+                }
+            }
             Divider()
             Button("Copy Path") {
                 NSPasteboard.general.clearContents()

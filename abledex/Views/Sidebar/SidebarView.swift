@@ -432,6 +432,11 @@ struct SidebarView: View {
                     Image(systemName: location.isAutoDetected ? "folder.fill" : "folder.badge.person.crop")
                 }
                 .contextMenu {
+                    Button("Scan Location") {
+                        Task {
+                            await appState.startLocationScan(location)
+                        }
+                    }
                     Button("Reveal in Finder") {
                         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: location.path)
                     }
@@ -495,6 +500,14 @@ struct SidebarView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(appState.isScanning)
+            .contextMenu {
+                Button("Force Re-scan All") {
+                    Task {
+                        await appState.startScan(forceReparse: true)
+                    }
+                }
+                .disabled(appState.isScanning)
+            }
             .padding(.horizontal)
         }
         .padding(.vertical, 8)

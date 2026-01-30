@@ -292,28 +292,82 @@ struct ALSParser: Sendable {
     private nonisolated func extractPlugins(from xmlString: String) -> [String] {
         var plugins: Set<String> = []
 
-        let pattern = #"<PlugName Value="([^"]+)""#
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            return []
-        }
+        // Ableton 12.x: AU plugins — find <AuPluginInfo then <Name Value="..."/> nearby
+        extractPluginsByTag(from: xmlString, openTag: "<AuPluginInfo", nameTag: "<Name Value=\"", into: &plugins)
 
-        let range = NSRange(xmlString.startIndex..., in: xmlString)
-        let matches = regex.matches(in: xmlString, options: [], range: range)
+        // Ableton 12.x: VST3 plugins — find <Vst3PluginInfo then <Name Value="..."/> nearby
+        extractPluginsByTag(from: xmlString, openTag: "<Vst3PluginInfo", nameTag: "<Name Value=\"", into: &plugins)
 
-        for match in matches.prefix(200) { // Limit
-            if let valueRange = Range(match.range(at: 1), in: xmlString) {
-                let name = String(xmlString[valueRange])
-                if !name.isEmpty && name != "None" && !isBuiltInDevice(name) {
-                    plugins.insert(name)
-                }
-            }
-        }
+        // Older Ableton / VST2: <VstPluginInfo then <PlugName Value="..."/>
+        extractPluginsByTag(from: xmlString, openTag: "<VstPluginInfo", nameTag: "<PlugName Value=\"", into: &plugins)
+
+        // Fallback: top-level <PlugName Value="..."/> (older format)
+        extractPluginsByTag(from: xmlString, openTag: "<PlugName Value=\"", nameTag: nil, into: &plugins)
 
         return Array(plugins).sorted()
     }
 
+    /// Fast string-search plugin extraction — no expensive multiline regex
+    private nonisolated func extractPluginsByTag(
+        from xmlString: String,
+        openTag: String,
+        nameTag: String?,
+        into plugins: inout Set<String>
+    ) {
+        var searchStart = xmlString.startIndex
+
+        for _ in 0..<200 { // Safety limit
+            guard let tagRange = xmlString.range(of: openTag, range: searchStart..<xmlString.endIndex) else {
+                break
+            }
+
+            searchStart = tagRange.upperBound
+
+            if let nameTag = nameTag {
+                // Search for the name tag within the next 2000 characters of the block
+                let searchEnd = xmlString.index(tagRange.upperBound, offsetBy: 2000, limitedBy: xmlString.endIndex) ?? xmlString.endIndex
+                guard let nameStart = xmlString.range(of: nameTag, range: tagRange.upperBound..<searchEnd) else {
+                    continue
+                }
+
+                // Extract value between quotes
+                let valueStart = nameStart.upperBound
+                guard let quoteEnd = xmlString.range(of: "\"", range: valueStart..<searchEnd) else {
+                    continue
+                }
+
+                let name = String(xmlString[valueStart..<quoteEnd.lowerBound])
+                if isThirdPartyPlugin(name) {
+                    plugins.insert(name)
+                }
+            } else {
+                // The openTag itself contains the value (e.g. <PlugName Value="...)
+                let valueStart = tagRange.upperBound
+                let searchEnd = xmlString.index(valueStart, offsetBy: 200, limitedBy: xmlString.endIndex) ?? xmlString.endIndex
+                guard let quoteEnd = xmlString.range(of: "\"", range: valueStart..<searchEnd) else {
+                    continue
+                }
+
+                let name = String(xmlString[valueStart..<quoteEnd.lowerBound])
+                if isThirdPartyPlugin(name) {
+                    plugins.insert(name)
+                }
+            }
+        }
+    }
+
+    private nonisolated func isThirdPartyPlugin(_ name: String) -> Bool {
+        guard !name.isEmpty, name != "None" else { return false }
+        return !isBuiltInDevice(name)
+    }
+
     private nonisolated func isBuiltInDevice(_ name: String) -> Bool {
-        let prefixes = ["Ableton", "Audio", "Auto", "Beat", "Corpus", "Delay", "Drum", "EQ", "External", "Filter", "Flanger", "Gate", "Glue", "Grain", "Limiter", "Looper", "MIDI", "Multiband", "Overdrive", "Pedal", "Phaser", "Pitch", "Redux", "Resonator", "Reverb", "Saturator", "Scale", "Simple", "Spectrum", "Tension", "Tuner", "Utility", "Vinyl", "Vocoder", "Wavetable"]
+        let prefixes = ["Ableton", "Audio", "Auto", "Beat", "Corpus", "Delay", "Drum",
+                        "EQ", "External", "Filter", "Flanger", "Gate", "Glue", "Grain",
+                        "Limiter", "Looper", "MIDI", "Multiband", "Overdrive", "Pedal",
+                        "Phaser", "Pitch", "Redux", "Resonator", "Reverb", "Saturator",
+                        "Scale", "Simple", "Spectrum", "Tension", "Tuner", "Utility",
+                        "Vinyl", "Vocoder", "Wavetable"]
         return prefixes.contains { name.hasPrefix($0) }
     }
 

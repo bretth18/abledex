@@ -40,6 +40,7 @@ final class ProjectScanner: Sendable {
     }
 
     func scanAllLocations(
+        forceReparse: Bool = false,
         progress: @escaping @Sendable (ScanProgress) -> Void
     ) async throws -> Int {
         let startTime = Date()
@@ -51,7 +52,7 @@ final class ProjectScanner: Sendable {
         let totalProjects = try await withThrowingTaskGroup(of: Int.self) { group in
             for location in locations {
                 group.addTask {
-                    try await self.scanLocation(location, progress: progress)
+                    try await self.scanLocation(location, forceReparse: forceReparse, progress: progress)
                 }
             }
 
@@ -70,6 +71,7 @@ final class ProjectScanner: Sendable {
 
     func scanLocation(
         _ location: LocationRecord,
+        forceReparse: Bool = false,
         progress: @escaping @Sendable (ScanProgress) -> Void
     ) async throws -> Int {
         let locationURL = URL(fileURLWithPath: location.path)
@@ -104,7 +106,8 @@ final class ProjectScanner: Sendable {
                     let existing = existingProjects[discovered.alsFilePath.path]
 
                     // Skip files that haven't changed since last index
-                    if let existing = existing,
+                    if !forceReparse,
+                       let existing = existing,
                        abs(existing.filesystemModifiedDate.timeIntervalSince(discovered.modifiedDate)) < 1.0 {
                         continue
                     }
@@ -145,6 +148,37 @@ final class ProjectScanner: Sendable {
 
         try await database.updateLocationProjectCount(id: location.id, count: processed)
         return processed
+    }
+
+    func scanSingleProject(alsFilePath: String) async throws -> ProjectRecord? {
+        let url = URL(fileURLWithPath: alsFilePath)
+        let folderURL = url.deletingLastPathComponent()
+
+        guard FileManager.default.fileExists(atPath: alsFilePath) else { return nil }
+
+        let attrs = try FileManager.default.attributesOfItem(atPath: alsFilePath)
+        let modifiedDate = (attrs[.modificationDate] as? Date) ?? Date()
+        let createdDate = (attrs[.creationDate] as? Date) ?? modifiedDate
+
+        let projectName = url.deletingPathExtension().lastPathComponent
+        let sourceVolume = FileSystemCrawler.volumeName(for: url)
+
+        let discovered = DiscoveredProject(
+            folderPath: folderURL,
+            alsFilePath: url,
+            projectName: projectName,
+            sourceVolume: sourceVolume,
+            createdDate: createdDate,
+            modifiedDate: modifiedDate
+        )
+
+        let existingProjects = try await database.fetchProjects(byAlsFilePaths: [alsFilePath])
+        let existing = existingProjects[alsFilePath]
+
+        guard let record = parseProject(discovered, existing: existing) else { return nil }
+
+        try await database.saveProjects([record])
+        return record
     }
 
     private nonisolated func parseProject(_ discovered: DiscoveredProject, existing: ProjectRecord?) -> ProjectRecord? {
