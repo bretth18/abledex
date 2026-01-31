@@ -71,7 +71,28 @@ enum ALSParserError: Error, LocalizedError {
     }
 }
 
+// Cached regex patterns — compiled once at launch, reused across all parse calls
+private enum ALSRegex {
+    static let timeSignatureNumerator = try! NSRegularExpression(
+        pattern: #"<TimeSignature>[^<]*<[^>]*Numerator Value="(\d+)""#
+    )
+    static let timeSignatureDenominator = try! NSRegularExpression(
+        pattern: #"<TimeSignature>[^<]*<[^>]*Denominator Value="(\d+)""#
+    )
+    static let currentEnd = try! NSRegularExpression(
+        pattern: #"<CurrentEnd Value="([\d.]+)""#
+    )
+    static let sampleName = try! NSRegularExpression(
+        pattern: #"<Name Value="([^"]+\.(wav|aif|aiff|mp3|flac|m4a))""#,
+        options: .caseInsensitive
+    )
+    static let musicalKey = try! NSRegularExpression(
+        pattern: #"<ScaleInformation>\s*<Root Value="(\d+)"\s*/>\s*<Name Value="(\d+)""#
+    )
+}
+
 struct ALSParser: Sendable {
+
     nonisolated init() {}
 
     nonisolated func parse(alsFilePath: URL) throws -> ParsedProjectData {
@@ -116,7 +137,7 @@ struct ALSParser: Sendable {
             return data
         }
 
-        // Skip gzip header and decompress
+        // Skip gzip header to find deflate payload
         var headerLength = 10
         let bytes = [UInt8](data)
 
@@ -150,25 +171,65 @@ struct ALSParser: Sendable {
         }
 
         let deflateData = data.subdata(in: headerLength..<(data.count - 8))
-        let destinationBufferSize = min(data.count * 30, 100_000_000) // Cap at 100MB
-        var destinationBuffer = [UInt8](repeating: 0, count: destinationBufferSize)
 
-        let decompressedSize = deflateData.withUnsafeBytes { sourceBuffer in
-            compression_decode_buffer(
-                &destinationBuffer,
-                destinationBufferSize,
-                sourceBuffer.bindMemory(to: UInt8.self).baseAddress!,
-                deflateData.count,
-                nil,
-                COMPRESSION_ZLIB
-            )
+        // Streaming decompression — grows buffer as needed instead of pre-allocating 100MB
+        let streamPtr = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
+        streamPtr.initialize(to: compression_stream(
+            dst_ptr: UnsafeMutablePointer<UInt8>.allocate(capacity: 0),
+            dst_size: 0,
+            src_ptr: UnsafePointer<UInt8>(bitPattern: 1)!,
+            src_size: 0,
+            state: nil
+        ))
+        let initStatus = compression_stream_init(streamPtr, COMPRESSION_STREAM_DECODE, COMPRESSION_ZLIB)
+        guard initStatus == COMPRESSION_STATUS_OK else {
+            streamPtr.deallocate()
+            throw ALSParserError.decompressionFailed
+        }
+        defer {
+            compression_stream_destroy(streamPtr)
+            streamPtr.deallocate()
         }
 
-        guard decompressedSize > 0 else {
+        let chunkSize = 65_536 // 64KB output chunks
+        var result = Data()
+        result.reserveCapacity(min(deflateData.count * 10, 50_000_000))
+
+        let outputBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: chunkSize)
+        defer { outputBuffer.deallocate() }
+
+        try deflateData.withUnsafeBytes { sourceBuffer in
+            let sourcePtr = sourceBuffer.bindMemory(to: UInt8.self)
+            streamPtr.pointee.src_ptr = sourcePtr.baseAddress!
+            streamPtr.pointee.src_size = sourcePtr.count
+
+            while true {
+                streamPtr.pointee.dst_ptr = outputBuffer
+                streamPtr.pointee.dst_size = chunkSize
+
+                let processStatus = compression_stream_process(streamPtr, Int32(COMPRESSION_STREAM_FINALIZE.rawValue))
+
+                let bytesWritten = chunkSize - streamPtr.pointee.dst_size
+                if bytesWritten > 0 {
+                    result.append(outputBuffer, count: bytesWritten)
+                }
+
+                switch processStatus {
+                case COMPRESSION_STATUS_OK:
+                    continue
+                case COMPRESSION_STATUS_END:
+                    return
+                default:
+                    throw ALSParserError.decompressionFailed
+                }
+            }
+        }
+
+        guard !result.isEmpty else {
             throw ALSParserError.decompressionFailed
         }
 
-        return Data(destinationBuffer.prefix(decompressedSize))
+        return result
     }
 
     private nonisolated func parseXML(_ xmlString: String) -> ParsedProjectData {
@@ -186,8 +247,8 @@ struct ALSParser: Sendable {
         result.bpm = extractBPM(from: xmlString)
 
         // Parse time signature
-        result.timeSignatureNumerator = extractFirstInt(from: xmlString, pattern: #"<TimeSignature>[^<]*<[^>]*Numerator Value="(\d+)""#) ?? 4
-        result.timeSignatureDenominator = extractFirstInt(from: xmlString, pattern: #"<TimeSignature>[^<]*<[^>]*Denominator Value="(\d+)""#) ?? 4
+        result.timeSignatureNumerator = extractFirstInt(from: xmlString, regex: ALSRegex.timeSignatureNumerator) ?? 4
+        result.timeSignatureDenominator = extractFirstInt(from: xmlString, regex: ALSRegex.timeSignatureDenominator) ?? 4
 
         // Count tracks - fast counting without creating arrays
         result.audioTrackCount = countOccurrences(of: "<AudioTrack Id=", in: xmlString)
@@ -195,7 +256,7 @@ struct ALSParser: Sendable {
         result.returnTrackCount = countOccurrences(of: "<ReturnTrack Id=", in: xmlString)
 
         // Parse arrangement length
-        if let beats = extractFirstDouble(from: xmlString, pattern: #"<CurrentEnd Value="([\d.]+)""#),
+        if let beats = extractFirstDouble(from: xmlString, regex: ALSRegex.currentEnd),
            let bpm = result.bpm, bpm > 0 {
             result.duration = (beats / bpm) * 60.0
         }
@@ -242,10 +303,7 @@ struct ALSParser: Sendable {
         return Double(tempoBlock[manualStart.upperBound..<manualEnd.lowerBound])
     }
 
-    private nonisolated func extractFirstDouble(from string: String, pattern: String) -> Double? {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
-            return nil
-        }
+    private nonisolated func extractFirstDouble(from string: String, regex: NSRegularExpression) -> Double? {
         let range = NSRange(string.startIndex..., in: string)
         guard let match = regex.firstMatch(in: string, options: [], range: range),
               match.numberOfRanges > 1,
@@ -255,10 +313,7 @@ struct ALSParser: Sendable {
         return Double(string[valueRange])
     }
 
-    private nonisolated func extractFirstInt(from string: String, pattern: String) -> Int? {
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
-            return nil
-        }
+    private nonisolated func extractFirstInt(from string: String, regex: NSRegularExpression) -> Int? {
         let range = NSRange(string.startIndex..., in: string)
         guard let match = regex.firstMatch(in: string, options: [], range: range),
               match.numberOfRanges > 1,
@@ -271,14 +326,8 @@ struct ALSParser: Sendable {
     private nonisolated func extractSampleNames(from xmlString: String) -> [String] {
         var names: Set<String> = []
 
-        // Only look for sample file names, not full paths
-        let pattern = #"<Name Value="([^"]+\.(wav|aif|aiff|mp3|flac|m4a))""#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive) else {
-            return []
-        }
-
         let range = NSRange(xmlString.startIndex..., in: xmlString)
-        let matches = regex.matches(in: xmlString, options: [], range: range)
+        let matches = ALSRegex.sampleName.matches(in: xmlString, options: [], range: range)
 
         for match in matches.prefix(500) { // Limit to first 500 samples
             if let valueRange = Range(match.range(at: 1), in: xmlString) {
@@ -374,15 +423,8 @@ struct ALSParser: Sendable {
     private nonisolated func extractMusicalKeys(from xmlString: String) -> [String] {
         var keys: Set<String> = []
 
-        // Pattern to match ScaleInformation blocks with Root and Name values
-        // Structure: <ScaleInformation><Root Value="X" /><Name Value="Y" /></ScaleInformation>
-        let pattern = #"<ScaleInformation>\s*<Root Value="(\d+)"\s*/>\s*<Name Value="(\d+)""#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else {
-            return []
-        }
-
         let range = NSRange(xmlString.startIndex..., in: xmlString)
-        let matches = regex.matches(in: xmlString, options: [], range: range)
+        let matches = ALSRegex.musicalKey.matches(in: xmlString, options: [], range: range)
 
         for match in matches.prefix(100) { // Limit to avoid performance issues
             guard match.numberOfRanges >= 3,

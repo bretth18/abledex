@@ -879,13 +879,23 @@ struct XMLTextView: NSViewRepresentable {
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    struct CachedLayout {
+        var size: CGSize
+        var frames: [CGRect]
+    }
+
+    func makeCache(subviews: Subviews) -> CachedLayout? {
+        nil
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout CachedLayout?) -> CGSize {
         let result = arrange(proposal: proposal, subviews: subviews)
+        cache = result
         return result.size
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let result = arrange(proposal: proposal, subviews: subviews)
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout CachedLayout?) {
+        let result = cache ?? arrange(proposal: proposal, subviews: subviews)
 
         for (index, frame) in result.frames.enumerated() {
             subviews[index].place(
@@ -895,7 +905,7 @@ struct FlowLayout: Layout {
         }
     }
 
-    private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, frames: [CGRect]) {
+    private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> CachedLayout {
         let width = proposal.width ?? .infinity
         var frames: [CGRect] = []
         var x: CGFloat = 0
@@ -917,6 +927,6 @@ struct FlowLayout: Layout {
         }
 
         let totalHeight = y + rowHeight
-        return (CGSize(width: width, height: totalHeight), frames)
+        return CachedLayout(size: CGSize(width: width, height: totalHeight), frames: frames)
     }
 }

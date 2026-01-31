@@ -23,13 +23,14 @@ final class AppState {
 
     var projects: [ProjectRecord] = [] {
         didSet {
-            // Skip if this is the initial load (caches already populated)
-            guard !isInitialLoad else { return }
+            // Skip if this is the initial load or batch update in progress
+            guard !isInitialLoad, !isBatchUpdating else { return }
             recomputeCachedCounts()
             recomputeFilteredProjects()
         }
     }
     private var isInitialLoad = true
+    private var isBatchUpdating = false
     var locations: [LocationRecord] = []
     var selectedProjectIDs: Set<UUID> = []
     var searchQuery: String = "" {
@@ -64,6 +65,8 @@ final class AppState {
     private(set) var cachedProjectsByFolder: [String: [ProjectRecord]] = [:]
     private(set) var cachedDuplicateGroups: [DuplicateGroup] = []
     private(set) var cachedDuplicatesCount: Int = 0
+    private(set) var cachedDuplicateProjectIDs: Set<UUID> = []  // O(1) lookup for detail view
+    private var duplicateDebounceTask: Task<Void, Never>?
 
     private func recomputeCachedCounts() {
         var newStatusCounts: [CompletionStatus: Int] = [:]
@@ -120,21 +123,27 @@ final class AppState {
         cachedFoldersWithMultipleVersions = newFolderCounts.filter { $0.value > 1 }.keys.sorted()
         cachedProjectsByFolder = Dictionary(grouping: projects, by: { $0.projectFolderName })
 
-        // Recompute duplicates in background (O(n²) operation)
-        let projectsSnapshot = self.projects
-        Task.detached(priority: .utility) {
-            let groups = await DuplicateDetectionService().findDuplicates(in: projectsSnapshot)
-            let count = Set(groups.flatMap { $0.projects.map { $0.id } }).count
-            await MainActor.run { [groups, count] in
-                // Update state on the main actor
-                // Accessing self here is safe as this closure executes on MainActor
-                // and we didn't capture self in the detached task
-                let update: @MainActor () -> Void = {
-                    self.cachedDuplicateGroups = groups
-                    self.cachedDuplicatesCount = count
-                }
-                update()
-            }
+        // Debounced duplicate detection — avoids re-running O(n²) on every keystroke/edit
+        scheduleDuplicateRecomputation()
+    }
+
+    private func scheduleDuplicateRecomputation() {
+        duplicateDebounceTask?.cancel()
+        duplicateDebounceTask = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled else { return }
+
+            let projectsSnapshot = self.projects
+            let result = await Task.detached(priority: .utility) {
+                let groups = DuplicateDetectionService().findDuplicates(in: projectsSnapshot)
+                let ids = Set(groups.flatMap { $0.projects.map { $0.id } })
+                return (groups, ids)
+            }.value
+
+            guard !Task.isCancelled else { return }
+            self.cachedDuplicateGroups = result.0
+            self.cachedDuplicateProjectIDs = result.1
+            self.cachedDuplicatesCount = result.1.count
         }
     }
 
@@ -312,7 +321,7 @@ final class AppState {
     }
 
     func versionsInSameFolder(as project: ProjectRecord) -> [ProjectRecord] {
-        projects.filter { $0.folderPath == project.folderPath }
+        (cachedProjectsByFolder[project.projectFolderName] ?? [])
             .sorted { ($0.modifiedDate ?? $0.filesystemModifiedDate) < ($1.modifiedDate ?? $1.filesystemModifiedDate) }
     }
 
@@ -325,11 +334,17 @@ final class AppState {
     }
 
     func hasDuplicates(_ project: ProjectRecord) -> Bool {
-        duplicateService.hasDuplicates(project, in: projects)
+        cachedDuplicateProjectIDs.contains(project.id)
     }
 
     func duplicatesOf(_ project: ProjectRecord) -> [ProjectRecord] {
-        duplicateService.duplicatesOf(project, in: projects)
+        // Use cached groups for O(1) lookup instead of O(n) scan
+        for group in cachedDuplicateGroups {
+            if group.projects.contains(where: { $0.id == project.id }) {
+                return group.projects.filter { $0.id != project.id }
+            }
+        }
+        return []
     }
 
     var projectCount: Int {
@@ -386,6 +401,7 @@ final class AppState {
             cachedFilteredProjects = caches.filteredProjects
             cachedDuplicateGroups = caches.duplicateGroups
             cachedDuplicatesCount = caches.duplicatesCount
+            cachedDuplicateProjectIDs = caches.duplicateProjectIDs
 
             // Set projects (didSet skipped due to isInitialLoad flag)
             projects = fetchedProjects
@@ -417,6 +433,7 @@ final class AppState {
         var filteredProjects: [ProjectRecord]
         var duplicateGroups: [DuplicateGroup]
         var duplicatesCount: Int
+        var duplicateProjectIDs: Set<UUID>
     }
 
     private nonisolated func computeCachesOffMainThread(for projects: [ProjectRecord]) -> ComputedCaches {
@@ -445,7 +462,7 @@ final class AppState {
 
         // Compute duplicates (O(n²) but done off main thread)
         let duplicateGroups = DuplicateDetectionService().findDuplicates(in: projects)
-        let duplicatesCount = Set(duplicateGroups.flatMap { $0.projects.map { $0.id } }).count
+        let duplicateProjectIDs = Set(duplicateGroups.flatMap { $0.projects.map { $0.id } })
 
         return ComputedCaches(
             statusCounts: statusCounts,
@@ -464,7 +481,8 @@ final class AppState {
             projectsByFolder: Dictionary(grouping: projects, by: { $0.projectFolderName }),
             filteredProjects: sortedProjects,
             duplicateGroups: duplicateGroups,
-            duplicatesCount: duplicatesCount
+            duplicatesCount: duplicateProjectIDs.count,
+            duplicateProjectIDs: duplicateProjectIDs
         )
     }
 
@@ -591,6 +609,9 @@ final class AppState {
         let scanner = self.scanner
         let total = projectsToRescan.count
 
+        // Suppress recomputation during the loop, trigger once at end
+        isBatchUpdating = true
+
         var scannedCount = 0
         for project in projectsToRescan {
             scannedCount += 1
@@ -612,6 +633,10 @@ final class AppState {
                 projects[index] = record
             }
         }
+
+        isBatchUpdating = false
+        recomputeCachedCounts()
+        recomputeFilteredProjects()
 
         scanProgress = .completed(projectCount: total, duration: 0)
         isScanning = false
@@ -746,57 +771,81 @@ final class AppState {
 
     // MARK: - Batch Operations
 
+    /// Performs a batch update: collects all mutations, saves to DB in one transaction,
+    /// updates the projects array once, then recomputes caches once.
+    private func performBatchUpdate(_ mutate: (inout [ProjectRecord]) -> [ProjectRecord]) async throws {
+        var mutableProjects = projects
+        let updatedRecords = mutate(&mutableProjects)
+
+        guard !updatedRecords.isEmpty else { return }
+
+        // Save all changes in a single DB transaction
+        try await database.saveProjects(updatedRecords)
+
+        // Apply to array with recomputation suppressed, then trigger once
+        isBatchUpdating = true
+        projects = mutableProjects
+        isBatchUpdating = false
+
+        recomputeCachedCounts()
+        recomputeFilteredProjects()
+    }
+
     func batchSetStatus(_ status: CompletionStatus) async throws {
-        for id in selectedProjectIDs {
-            if var project = projects.first(where: { $0.id == id }) {
-                project.completionStatus = status
-                try await database.saveProject(project)
+        try await performBatchUpdate { projects in
+            var updated: [ProjectRecord] = []
+            for id in selectedProjectIDs {
                 if let index = projects.firstIndex(where: { $0.id == id }) {
-                    projects[index] = project
+                    projects[index].completionStatus = status
+                    updated.append(projects[index])
                 }
             }
+            return updated
         }
     }
 
     func batchAddTag(_ tag: String) async throws {
-        for id in selectedProjectIDs {
-            if var project = projects.first(where: { $0.id == id }) {
-                if !project.userTags.contains(tag) {
-                    var tags = project.userTags
-                    tags.append(tag)
-                    project.userTags = tags
-                    try await database.saveProject(project)
-                    if let index = projects.firstIndex(where: { $0.id == id }) {
-                        projects[index] = project
+        try await performBatchUpdate { projects in
+            var updated: [ProjectRecord] = []
+            for id in selectedProjectIDs {
+                if let index = projects.firstIndex(where: { $0.id == id }) {
+                    if !projects[index].userTags.contains(tag) {
+                        var tags = projects[index].userTags
+                        tags.append(tag)
+                        projects[index].userTags = tags
+                        updated.append(projects[index])
                     }
                 }
             }
+            return updated
         }
     }
 
     func batchRemoveTag(_ tag: String) async throws {
-        for id in selectedProjectIDs {
-            if var project = projects.first(where: { $0.id == id }) {
-                var tags = project.userTags
-                tags.removeAll { $0 == tag }
-                project.userTags = tags
-                try await database.saveProject(project)
+        try await performBatchUpdate { projects in
+            var updated: [ProjectRecord] = []
+            for id in selectedProjectIDs {
                 if let index = projects.firstIndex(where: { $0.id == id }) {
-                    projects[index] = project
+                    var tags = projects[index].userTags
+                    tags.removeAll { $0 == tag }
+                    projects[index].userTags = tags
+                    updated.append(projects[index])
                 }
             }
+            return updated
         }
     }
 
     func batchToggleFavorite(_ setFavorite: Bool) async throws {
-        for id in selectedProjectIDs {
-            if var project = projects.first(where: { $0.id == id }) {
-                project.isFavorite = setFavorite
-                try await database.saveProject(project)
+        try await performBatchUpdate { projects in
+            var updated: [ProjectRecord] = []
+            for id in selectedProjectIDs {
                 if let index = projects.firstIndex(where: { $0.id == id }) {
-                    projects[index] = project
+                    projects[index].isFavorite = setFavorite
+                    updated.append(projects[index])
                 }
             }
+            return updated
         }
     }
 
@@ -811,14 +860,15 @@ final class AppState {
     }
 
     func batchSetColorLabel(_ colorLabel: ColorLabel) async throws {
-        for id in selectedProjectIDs {
-            if var project = projects.first(where: { $0.id == id }) {
-                project.colorLabel = colorLabel
-                try await database.saveProject(project)
+        try await performBatchUpdate { projects in
+            var updated: [ProjectRecord] = []
+            for id in selectedProjectIDs {
                 if let index = projects.firstIndex(where: { $0.id == id }) {
-                    projects[index] = project
+                    projects[index].colorLabel = colorLabel
+                    updated.append(projects[index])
                 }
             }
+            return updated
         }
     }
 
