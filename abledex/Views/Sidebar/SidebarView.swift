@@ -9,6 +9,7 @@ import SwiftUI
 
 struct SidebarView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.theme) private var theme
     @AppStorage("useCamelotNotation") private var useCamelotNotation = false
     @State private var isLibraryExpanded = true
     @State private var expandedSections: Set<SidebarSection> = [.status, .tags, .colors, .locations]
@@ -39,6 +40,7 @@ struct SidebarView: View {
             }
         }
         .listStyle(.sidebar)
+        .scrollContentBackground(theme.usesCustomBackground ? .hidden : .automatic)
         .safeAreaInset(edge: .bottom) {
             bottomBar
         }
@@ -90,7 +92,7 @@ struct SidebarView: View {
                 .buttonStyle(.plain)
                 .listRowBackground(
                     appState.showDuplicatesOnly
-                        ? Color.accentColor.opacity(0.2)
+                        ? theme.surfaceSelected
                         : Color.clear
                 )
             }
@@ -146,13 +148,13 @@ struct SidebarView: View {
                         }
                     } icon: {
                         Image(systemName: status.icon)
-                            .foregroundStyle(statusColor(for: status))
+                            .foregroundStyle(theme.statusColor(for: status))
                     }
                 }
                 .buttonStyle(.plain)
                 .listRowBackground(
                     appState.selectedStatusFilter == status
-                        ? Color.accentColor.opacity(0.2)
+                        ? theme.surfaceSelected
                         : Color.clear
                 )
             }
@@ -186,13 +188,13 @@ struct SidebarView: View {
                             }
                         } icon: {
                             Image(systemName: "circle.fill")
-                                .foregroundStyle(colorForLabel(label))
+                                .foregroundStyle(theme.colorLabel(for: label))
                         }
                     }
                     .buttonStyle(.plain)
                     .listRowBackground(
                         appState.selectedColorLabelFilter == label
-                            ? Color.accentColor.opacity(0.2)
+                            ? theme.surfaceSelected
                             : Color.clear
                     )
                 }
@@ -233,7 +235,7 @@ struct SidebarView: View {
                     .buttonStyle(.plain)
                     .listRowBackground(
                         appState.selectedPluginFilter == plugin
-                            ? Color.accentColor.opacity(0.2)
+                            ? theme.surfaceSelected
                             : Color.clear
                     )
                 }
@@ -279,7 +281,7 @@ struct SidebarView: View {
                     .buttonStyle(.plain)
                     .listRowBackground(
                         appState.selectedKeyFilter == key
-                            ? Color.accentColor.opacity(0.2)
+                            ? theme.surfaceSelected
                             : Color.clear
                     )
                 }
@@ -320,7 +322,7 @@ struct SidebarView: View {
                     .buttonStyle(.plain)
                     .listRowBackground(
                         appState.selectedFolderFilter == folder
-                            ? Color.accentColor.opacity(0.2)
+                            ? theme.surfaceSelected
                             : Color.clear
                     )
                 }
@@ -365,7 +367,7 @@ struct SidebarView: View {
                     .buttonStyle(.plain)
                     .listRowBackground(
                         appState.selectedTagFilter == tag
-                            ? Color.accentColor.opacity(0.2)
+                            ? theme.surfaceSelected
                             : Color.clear
                     )
                 }
@@ -404,7 +406,7 @@ struct SidebarView: View {
                     .buttonStyle(.plain)
                     .listRowBackground(
                         appState.selectedVolumeFilter == volume
-                            ? Color.accentColor.opacity(0.2)
+                            ? theme.surfaceSelected
                             : Color.clear
                     )
                 }
@@ -511,7 +513,7 @@ struct SidebarView: View {
             .padding(.horizontal)
         }
         .padding(.vertical, 8)
-        .background(.bar)
+        .background(theme.usesCustomBackground ? AnyShapeStyle(theme.barBackground) : AnyShapeStyle(.bar))
     }
 
     // MARK: - Expansion Binding Helper
@@ -698,29 +700,6 @@ struct SidebarView: View {
 
     private func statusCount(for status: CompletionStatus) -> Int {
         appState.statusCounts[status] ?? 0
-    }
-
-    private func statusColor(for status: CompletionStatus) -> Color {
-        switch status {
-        case .none: return .secondary
-        case .idea: return .yellow
-        case .inProgress: return .blue
-        case .mixing: return .purple
-        case .done: return .green
-        }
-    }
-
-    private func colorForLabel(_ label: ColorLabel) -> Color {
-        switch label {
-        case .none: return .clear
-        case .red: return .red
-        case .orange: return .orange
-        case .yellow: return .yellow
-        case .green: return .green
-        case .blue: return .blue
-        case .purple: return .purple
-        case .gray: return .gray
-        }
     }
 
     private func selectFolder() {

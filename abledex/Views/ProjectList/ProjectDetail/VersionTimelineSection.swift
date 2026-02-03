@@ -10,6 +10,7 @@ import SwiftUI
 struct VersionTimelineSection: View {
     let project: ProjectRecord
     @Environment(AppState.self) private var appState
+    @Environment(\.theme) private var theme
     @State private var isExpanded = true
 
     private var versions: [ProjectRecord] {
@@ -45,7 +46,7 @@ struct VersionTimelineSection: View {
             // Timeline connector
             VStack(spacing: 0) {
                 Circle()
-                    .fill(isCurrent ? Color.accentColor : Color.secondary.opacity(0.5))
+                    .fill(isCurrent ? theme.accent : Color.secondary.opacity(0.5))
                     .frame(width: 10, height: 10)
 
                 if !isLast {
@@ -71,8 +72,8 @@ struct VersionTimelineSection: View {
                             .font(.caption2)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.accentColor.opacity(0.2))
-                            .foregroundStyle(Color.accentColor)
+                            .background(theme.accent.opacity(0.2))
+                            .foregroundStyle(theme.accent)
                             .clipShape(Capsule())
                     }
 

@@ -15,6 +15,7 @@ struct WaveformView: View {
     let isActive: Bool
     let onSeek: ((Double) -> Void)?
 
+    @Environment(\.theme) private var theme
     @State private var isDragging = false
     @State private var dragProgress: Double = 0
 
@@ -82,9 +83,9 @@ struct WaveformView: View {
 
             let color: Color
             if index < progressIndex {
-                color = isActive ? .accentColor : .gray.opacity(0.6)
+                color = isActive ? theme.waveformPlayed : .gray.opacity(0.6)
             } else {
-                color = .gray.opacity(0.3)
+                color = theme.waveformUnplayed
             }
 
             context.fill(
@@ -100,7 +101,7 @@ struct WaveformView: View {
             var playheadPath = Path()
             playheadPath.move(to: CGPoint(x: playheadX, y: 0))
             playheadPath.addLine(to: CGPoint(x: playheadX, y: size.height))
-            context.stroke(playheadPath, with: .color(.accentColor), lineWidth: 2)
+            context.stroke(playheadPath, with: .color(theme.waveformPlayhead), lineWidth: 2)
         }
     }
 }

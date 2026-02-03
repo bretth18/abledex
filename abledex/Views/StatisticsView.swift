@@ -11,6 +11,7 @@ import Charts
 struct StatisticsView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.theme) private var theme
 
     // Cached storage data to avoid synchronous file I/O on every render
     @State private var cachedStorageByVolume: [(volume: String, size: Int64, count: Int)] = []
@@ -200,8 +201,7 @@ struct StatisticsView: View {
                                     }
                                     .padding(.vertical, 4)
                                     .padding(.horizontal, 8)
-                                    .background(.quaternary.opacity(0.5))
-                                    .clipShape(RoundedRectangle(cornerRadius: 6))
+                                    .themedCard(cornerRadius: 6)
                                     .contentShape(Rectangle())
                                 }
                                 .buttonStyle(.plain)
@@ -223,7 +223,7 @@ struct StatisticsView: View {
                                 x: .value("BPM Range", item.range),
                                 y: .value("Count", item.count)
                             )
-                            .foregroundStyle(.blue.gradient)
+                            .foregroundStyle(theme.chartPrimary.gradient)
                         }
                         .frame(height: 200)
                     } else {
@@ -233,7 +233,7 @@ struct StatisticsView: View {
                                     Text("\(item.count)")
                                         .font(.caption2)
                                     Rectangle()
-                                        .fill(.blue)
+                                        .fill(theme.chartPrimary)
                                         .frame(width: 40, height: CGFloat(item.count) * 5)
                                     Text(item.range)
                                         .font(.caption2)
@@ -265,13 +265,13 @@ struct StatisticsView: View {
                                         x: .value("Week", item.week, unit: .weekOfYear),
                                         y: .value("Count", item.count)
                                     )
-                                    .foregroundStyle(.green.opacity(0.3))
+                                    .foregroundStyle(theme.chartSecondary.opacity(0.3))
 
                                     LineMark(
                                         x: .value("Week", item.week, unit: .weekOfYear),
                                         y: .value("Count", item.count)
                                     )
-                                    .foregroundStyle(.green)
+                                    .foregroundStyle(theme.chartSecondary)
                                 }
                                 .frame(height: 150)
                             }
@@ -292,7 +292,7 @@ struct StatisticsView: View {
                                         let maxCount = Double(projectsByDayOfWeek.map(\.count).max() ?? 1)
                                         let width = maxCount > 0 ? (Double(item.count) / maxCount) * geometry.size.width : 0
                                         RoundedRectangle(cornerRadius: 3)
-                                            .fill(.green.gradient)
+                                            .fill(theme.chartSecondary.gradient)
                                             .frame(width: max(0, width), height: 16)
                                     }
                                     .frame(height: 16)
@@ -362,7 +362,7 @@ struct StatisticsView: View {
                                 x: .value("Month", item.month, unit: .month),
                                 y: .value("Count", item.count)
                             )
-                            .foregroundStyle(.blue.gradient)
+                            .foregroundStyle(theme.chartPrimary.gradient)
                         }
                         .frame(height: 200)
                     }
@@ -371,6 +371,7 @@ struct StatisticsView: View {
             .padding()
         }
         .frame(minWidth: 700, idealWidth: 800, minHeight: 600, idealHeight: 700)
+        .background(theme.usesCustomBackground ? theme.background.ignoresSafeArea() : nil)
         .task {
             await loadStorageData()
         }
@@ -434,16 +435,7 @@ struct StatisticsView: View {
     private var statusData: [(status: CompletionStatus, count: Int, color: Color)] {
         CompletionStatus.allCases.map { status in
             let count = appState.projects.filter { $0.completionStatus == status }.count
-            let color: Color = {
-                switch status {
-                case .none: return .gray
-                case .idea: return .yellow
-                case .inProgress: return .blue
-                case .mixing: return .purple
-                case .done: return .green
-                }
-            }()
-            return (status, count, color)
+            return (status, count, theme.statusColor(for: status))
         }
     }
 
@@ -572,6 +564,7 @@ struct StatCard: View {
     let icon: String
     let color: Color
     var action: (() -> Void)? = nil
+    @Environment(\.theme) private var theme
 
     var body: some View {
         Group {
@@ -602,8 +595,7 @@ struct StatCard: View {
                 .foregroundStyle(.secondary)
         }
         .padding()
-        .background(.quaternary)
-        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .themedCard(cornerRadius: 12)
         .contentShape(Rectangle())
     }
 }
@@ -614,6 +606,7 @@ struct StatMiniCard: View {
     let title: String
     let value: String
     let icon: String
+    @Environment(\.theme) private var theme
 
     var body: some View {
         HStack {
@@ -628,7 +621,6 @@ struct StatMiniCard: View {
             }
         }
         .padding(8)
-        .background(.quaternary.opacity(0.5))
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .themedCard(cornerRadius: 8)
     }
 }

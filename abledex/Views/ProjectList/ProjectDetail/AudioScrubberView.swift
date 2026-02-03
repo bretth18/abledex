@@ -13,6 +13,7 @@ struct AudioScrubberView: View {
     let isActive: Bool
     let onSeek: (Double) -> Void
 
+    @Environment(\.theme) private var theme
     @State private var isDragging = false
     @State private var dragProgress: Double = 0
 
@@ -30,18 +31,18 @@ struct AudioScrubberView: View {
             ZStack(alignment: .leading) {
                 // Track background
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(Color.gray.opacity(0.3))
+                    .fill(theme.scrubberTrack)
                     .frame(height: 4)
 
                 // Progress fill
                 RoundedRectangle(cornerRadius: 2)
-                    .fill(isActive ? Color.accentColor : Color.gray.opacity(0.5))
+                    .fill(isActive ? theme.scrubberFill : Color.gray.opacity(0.5))
                     .frame(width: max(0, geometry.size.width * progressFraction), height: 4)
 
                 // Thumb (only show when active or dragging)
                 if isActive || isDragging {
                     Circle()
-                        .fill(Color.accentColor)
+                        .fill(theme.scrubberFill)
                         .frame(width: 10, height: 10)
                         .offset(x: max(0, min(geometry.size.width - 10, geometry.size.width * progressFraction - 5)))
                 }
