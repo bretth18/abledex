@@ -11,6 +11,7 @@ import AppKit
 struct ProjectDetailView: View {
     let project: ProjectRecord
     @Environment(AppState.self) private var appState
+    @Environment(\.theme) private var theme
     @AppStorage("useCamelotNotation") private var useCamelotNotation = false
     @State private var editingNotes: String = ""
     @State private var newTag: String = ""
@@ -206,7 +207,7 @@ struct ProjectDetailView: View {
     @ViewBuilder
     private func statusButton(for status: CompletionStatus) -> some View {
         let isSelected = project.completionStatus == status
-        let color = statusColor(status)
+        let color = theme.statusColor(for: status)
 
         Button {
             Task {
@@ -222,15 +223,18 @@ struct ProjectDetailView: View {
                     .minimumScaleFactor(0.8)
             }
             .frame(minWidth: 56, maxWidth: .infinity, minHeight: 48)
-            .background(isSelected ? color.opacity(0.2) : Color.gray.opacity(0.15))
+            .background(isSelected ? color.opacity(0.2) : theme.surfacePrimary)
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(
                 RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? color : Color.clear, lineWidth: 2)
+                    .stroke(
+                        isSelected ? color : (theme.showsBorder ? theme.border : .clear),
+                        lineWidth: isSelected ? 2 : 0.5
+                    )
             )
         }
         .buttonStyle(.plain)
-        .foregroundStyle(isSelected ? color : Color.secondary)
+        .foregroundStyle(isSelected ? color : theme.textSecondary)
     }
 
     private var tagSuggestions: [String] {
@@ -258,12 +262,7 @@ struct ProjectDetailView: View {
                         }
                         .buttonStyle(.plain)
                     }
-                    .font(.caption)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.tint.opacity(0.15))
-                    .foregroundStyle(.tint)
-                    .clipShape(Capsule())
+                    .themedBadge(.accent)
                 }
 
                 // Add tag field
@@ -306,7 +305,7 @@ struct ProjectDetailView: View {
                 .font(.caption)
                 .padding(.horizontal, 8)
                 .padding(.vertical, 4)
-                .background(.quaternary)
+                .background(theme.surfacePrimary)
                 .clipShape(Capsule())
             }
         }
@@ -345,16 +344,6 @@ struct ProjectDetailView: View {
         }
     }
 
-    private func statusColor(_ status: CompletionStatus) -> Color {
-        switch status {
-        case .none: return .secondary
-        case .idea: return .yellow
-        case .inProgress: return .blue
-        case .mixing: return .purple
-        case .done: return .green
-        }
-    }
-
     private var colorLabelSection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Color")
@@ -371,7 +360,7 @@ struct ProjectDetailView: View {
     @ViewBuilder
     private func colorLabelButton(for label: ColorLabel) -> some View {
         let isSelected = project.colorLabel == label
-        let color = colorForLabel(label)
+        let color = theme.colorLabel(for: label)
 
         Button {
             Task {
@@ -381,7 +370,7 @@ struct ProjectDetailView: View {
             if label == .none {
                 Image(systemName: isSelected ? "circle.slash" : "circle.slash")
                     .font(.title2)
-                    .foregroundStyle(isSelected ? .primary : .tertiary)
+                    .foregroundStyle(isSelected ? theme.textPrimary : theme.textTertiary)
             } else {
                 Image(systemName: isSelected ? "circle.fill" : "circle")
                     .font(.title2)
@@ -390,21 +379,8 @@ struct ProjectDetailView: View {
         }
         .buttonStyle(.plain)
         .padding(4)
-        .background(isSelected ? Color.gray.opacity(0.2) : Color.clear)
+        .background(isSelected ? theme.surfacePrimary : Color.clear)
         .clipShape(Circle())
-    }
-
-    private func colorForLabel(_ label: ColorLabel) -> Color {
-        switch label {
-        case .none: return .clear
-        case .red: return .red
-        case .orange: return .orange
-        case .yellow: return .yellow
-        case .green: return .green
-        case .blue: return .blue
-        case .purple: return .purple
-        case .gray: return .gray
-        }
     }
 
     private var detailsSection: some View {
@@ -481,11 +457,7 @@ struct ProjectDetailView: View {
             FlowLayout(spacing: 6) {
                 ForEach(project.plugins, id: \.self) { plugin in
                     Text(plugin)
-                        .font(.caption)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(.quaternary)
-                        .clipShape(Capsule())
+                        .themedBadge(.neutral)
                 }
             }
         }
@@ -503,12 +475,7 @@ struct ProjectDetailView: View {
                             .font(.caption2)
                         Text(displayKey(key))
                     }
-                    .font(.caption)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(.pink.opacity(0.15))
-                    .foregroundStyle(.pink)
-                    .clipShape(Capsule())
+                    .themedBadge(.tinted(.pink))
                 }
             }
         }
@@ -636,7 +603,7 @@ struct ProjectDetailView: View {
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 8)
-        .background(isCurrentlyPlaying ? Color.accentColor.opacity(0.1) : Color.clear)
+        .background(isCurrentlyPlaying ? theme.accentSubtle : Color.clear)
         .clipShape(RoundedRectangle(cornerRadius: 6))
     }
 
@@ -709,7 +676,7 @@ struct ProjectDetailView: View {
                     .font(.callout)
                     .frame(minHeight: 100)
                     .padding(8)
-                    .background(.quaternary)
+                    .background(theme.surfaceSecondary)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             } else {
                 Text(project.userNotes?.isEmpty == false ? project.userNotes! : "No notes added")
@@ -717,7 +684,7 @@ struct ProjectDetailView: View {
                     .foregroundStyle(project.userNotes?.isEmpty == false ? .primary : .tertiary)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
-                    .background(.quaternary)
+                    .background(theme.surfaceSecondary)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
             }
         }
@@ -736,6 +703,7 @@ struct ProjectDetailView: View {
 struct XMLViewerSheet: View {
     let project: ProjectRecord
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.theme) private var theme
     @State private var xmlContent: String = ""
     @State private var isLoading: Bool = true
     @State private var errorMessage: String?
@@ -787,10 +755,11 @@ struct XMLViewerSheet: View {
                 }
                 Spacer()
             } else {
-                XMLTextView(text: xmlContent)
+                XMLTextView(text: xmlContent, backgroundColor: theme.xmlBackground, foregroundColor: theme.xmlForeground)
             }
         }
         .frame(minWidth: 700, minHeight: 500)
+        .background(theme.usesCustomBackground ? theme.background.ignoresSafeArea() : nil)
         .task {
             await loadXML()
         }
@@ -821,6 +790,8 @@ struct XMLViewerSheet: View {
 /// Uses Coordinator to set text off the main layout pass to avoid UI stalls.
 struct XMLTextView: NSViewRepresentable {
     let text: String
+    var backgroundColor: NSColor = .textBackgroundColor
+    var foregroundColor: NSColor = .textColor
 
     func makeCoordinator() -> Coordinator {
         Coordinator()
@@ -833,7 +804,7 @@ struct XMLTextView: NSViewRepresentable {
         textView.isEditable = false
         textView.isSelectable = true
         textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        textView.backgroundColor = NSColor.textBackgroundColor
+        textView.backgroundColor = backgroundColor
         textView.textContainerInset = NSSize(width: 8, height: 8)
         textView.isAutomaticQuoteSubstitutionEnabled = false
         textView.isAutomaticDashSubstitutionEnabled = false
@@ -854,17 +825,19 @@ struct XMLTextView: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
+        let textView = context.coordinator.textView!
+        textView.backgroundColor = backgroundColor
+
         guard context.coordinator.currentText != text else { return }
         context.coordinator.currentText = text
 
-        let textView = context.coordinator.textView!
         // Set text content with layout temporarily disabled to avoid stalling
         textView.textStorage?.beginEditing()
         textView.textStorage?.setAttributedString(NSAttributedString(
             string: text,
             attributes: [
                 .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
-                .foregroundColor: NSColor.textColor
+                .foregroundColor: foregroundColor
             ]
         ))
         textView.textStorage?.endEditing()
@@ -879,13 +852,23 @@ struct XMLTextView: NSViewRepresentable {
 struct FlowLayout: Layout {
     var spacing: CGFloat = 8
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+    struct CachedLayout {
+        var size: CGSize
+        var frames: [CGRect]
+    }
+
+    func makeCache(subviews: Subviews) -> CachedLayout? {
+        nil
+    }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout CachedLayout?) -> CGSize {
         let result = arrange(proposal: proposal, subviews: subviews)
+        cache = result
         return result.size
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let result = arrange(proposal: proposal, subviews: subviews)
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout CachedLayout?) {
+        let result = cache ?? arrange(proposal: proposal, subviews: subviews)
 
         for (index, frame) in result.frames.enumerated() {
             subviews[index].place(
@@ -895,7 +878,7 @@ struct FlowLayout: Layout {
         }
     }
 
-    private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> (size: CGSize, frames: [CGRect]) {
+    private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> CachedLayout {
         let width = proposal.width ?? .infinity
         var frames: [CGRect] = []
         var x: CGFloat = 0
@@ -917,6 +900,6 @@ struct FlowLayout: Layout {
         }
 
         let totalHeight = y + rowHeight
-        return (CGSize(width: width, height: totalHeight), frames)
+        return CachedLayout(size: CGSize(width: width, height: totalHeight), frames: frames)
     }
 }

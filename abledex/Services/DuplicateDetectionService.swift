@@ -57,6 +57,16 @@ struct DuplicateDetectionService: Sendable {
 
     /// Find projects with similar characteristics
     private func findSimilarProjects(in projects: [ProjectRecord]) -> [DuplicateGroup] {
+        // Pre-decode all plugin sets once to avoid repeated JSON decoding + lock contention in O(n²) loop
+        var pluginSetsById: [UUID: Set<String>] = [:]
+        pluginSetsById.reserveCapacity(projects.count)
+        for project in projects {
+            let plugins = project.plugins
+            if !plugins.isEmpty {
+                pluginSetsById[project.id] = Set(plugins)
+            }
+        }
+
         var groups: [DuplicateGroup] = []
         var processed = Set<UUID>()
 
@@ -70,7 +80,7 @@ struct DuplicateDetectionService: Sendable {
                 guard other.id != project.id else { continue }
                 guard !processed.contains(other.id) else { continue }
 
-                if isSimilar(project, other) {
+                if isSimilarFast(project, other, pluginsA: pluginSetsById[project.id], pluginsB: pluginSetsById[other.id]) {
                     similar.append(other)
                     processed.insert(other.id)
                 }
@@ -85,8 +95,8 @@ struct DuplicateDetectionService: Sendable {
         return groups
     }
 
-    /// Check if two projects are similar (BPM within 5, >50% plugin overlap)
-    private func isSimilar(_ a: ProjectRecord, _ b: ProjectRecord) -> Bool {
+    /// Fast similarity check using pre-decoded plugin sets
+    private func isSimilarFast(_ a: ProjectRecord, _ b: ProjectRecord, pluginsA: Set<String>?, pluginsB: Set<String>?) -> Bool {
         // Same hash means exact duplicate, handled separately
         if a.fileHash != nil && a.fileHash == b.fileHash {
             return false
@@ -94,43 +104,15 @@ struct DuplicateDetectionService: Sendable {
 
         // Check BPM similarity (within 5 BPM)
         guard let bpmA = a.bpm, let bpmB = b.bpm else { return false }
-        let bpmDiff = abs(bpmA - bpmB)
-        guard bpmDiff <= 5 else { return false }
+        guard abs(bpmA - bpmB) <= 5 else { return false }
 
-        // Check plugin overlap (>50%)
-        let pluginsA = Set(a.plugins)
-        let pluginsB = Set(b.plugins)
-
-        guard !pluginsA.isEmpty && !pluginsB.isEmpty else { return false }
+        // Check plugin overlap (>50%) using pre-decoded sets
+        guard let pluginsA = pluginsA, let pluginsB = pluginsB,
+              !pluginsA.isEmpty, !pluginsB.isEmpty else { return false }
 
         let overlap = pluginsA.intersection(pluginsB).count
         let minCount = min(pluginsA.count, pluginsB.count)
-        let overlapRatio = Double(overlap) / Double(minCount)
 
-        return overlapRatio > 0.5
-    }
-
-    /// Get duplicate projects for a specific project
-    func duplicatesOf(_ project: ProjectRecord, in allProjects: [ProjectRecord]) -> [ProjectRecord] {
-        var duplicates: [ProjectRecord] = []
-
-        // Exact duplicates (same hash)
-        if let hash = project.fileHash {
-            duplicates.append(contentsOf: allProjects.filter {
-                $0.id != project.id && $0.fileHash == hash
-            })
-        }
-
-        // Similar projects
-        duplicates.append(contentsOf: allProjects.filter {
-            $0.id != project.id && isSimilar(project, $0)
-        })
-
-        return duplicates
-    }
-
-    /// Check if a project has any duplicates
-    func hasDuplicates(_ project: ProjectRecord, in allProjects: [ProjectRecord]) -> Bool {
-        !duplicatesOf(project, in: allProjects).isEmpty
+        return Double(overlap) / Double(minCount) > 0.5
     }
 }

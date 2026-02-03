@@ -12,9 +12,27 @@ struct GeneralSettingsView: View {
     @AppStorage("scanExternalVolumes") private var scanExternalVolumes = true
     @AppStorage("showMissingSamplesWarning") private var showMissingSamplesWarning = true
     @AppStorage("useCamelotNotation") private var useCamelotNotation = false
+    @Environment(ThemeManager.self) private var themeManager
 
     var body: some View {
+        @Bindable var tm = themeManager
+
         Form {
+            Section {
+                Picker("Theme", selection: $tm.selectedThemeName) {
+                    ForEach(ThemeName.allCases) { name in
+                        Text(name.rawValue).tag(name)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                Text("System uses macOS colors. Studio is a high-contrast dark theme with Ableton orange accent.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } header: {
+                Text("Appearance")
+            }
+
             Section {
                 Toggle("Scan on launch", isOn: $autoScanOnLaunch)
                 Toggle("Include external volumes", isOn: $scanExternalVolumes)

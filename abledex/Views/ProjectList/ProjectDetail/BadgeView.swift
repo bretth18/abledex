@@ -13,12 +13,7 @@ struct BadgeView: View {
 
     var body: some View {
         Label(label, systemImage: icon)
-            .font(.caption)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(.tint.opacity(0.1))
-            .foregroundStyle(.tint)
-            .clipShape(Capsule())
+            .themedBadge(.accent)
     }
 }
 

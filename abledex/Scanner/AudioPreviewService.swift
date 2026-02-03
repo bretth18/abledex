@@ -139,9 +139,10 @@ final class AudioPreviewService {
             duration = audioPlayer?.duration ?? 0
             playbackProgress = 0
 
-            // Start progress timer
+            // Start progress timer — fires on main run loop, no Task wrapper needed
             progressTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-                Task { @MainActor [weak self] in
+                // Timer is on main run loop; MainActor check is compile-time only
+                MainActor.assumeIsolated {
                     self?.updateProgress()
                 }
             }
@@ -182,7 +183,7 @@ final class AudioPreviewService {
         audioPlayer?.play()
         isPlaying = true
         progressTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
+            MainActor.assumeIsolated {
                 self?.updateProgress()
             }
         }

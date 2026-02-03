@@ -187,41 +187,61 @@ struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, Persista
 
 // MARK: - JSON Decoding Cache
 
-/// Thread-safe cache for decoded JSON arrays to avoid repeated decoding
+/// Thread-safe LRU cache for decoded JSON arrays to avoid repeated decoding
 private final class JSONDecodeCache: @unchecked Sendable {
     static let shared = JSONDecodeCache()
 
+    private static let maxEntries = 2000
+
     private var cache: [String: [String]] = [:]
+    private var accessOrder: [String] = []  // LRU tracking: most recent at end
     private let lock = NSLock()
-
-    func get(_ json: String?) -> [String]? {
-        guard let json = json else { return nil }
-        lock.lock()
-        defer { lock.unlock() }
-        return cache[json]
-    }
-
-    func set(_ json: String, value: [String]) {
-        lock.lock()
-        defer { lock.unlock() }
-        cache[json] = value
-    }
+    private let decoder = JSONDecoder()
 
     func decode(_ json: String?) -> [String] {
         guard let json = json else { return [] }
 
+        lock.lock()
+
         // Check cache first
-        if let cached = get(json) {
+        if let cached = cache[json] {
+            // Move to end (most recently used)
+            if let idx = accessOrder.lastIndex(of: json) {
+                accessOrder.remove(at: idx)
+            }
+            accessOrder.append(json)
+            lock.unlock()
             return cached
         }
 
-        // Decode and cache
+        lock.unlock()
+
+        // Decode outside lock to avoid holding it during JSON parsing
         guard let data = json.data(using: .utf8),
-              let decoded = try? JSONDecoder().decode([String].self, from: data) else {
+              let decoded = try? decoder.decode([String].self, from: data) else {
             return []
         }
-        set(json, value: decoded)
+
+        lock.lock()
+        cache[json] = decoded
+        accessOrder.append(json)
+
+        // Evict oldest entries if over capacity
+        while cache.count > Self.maxEntries {
+            let oldest = accessOrder.removeFirst()
+            cache.removeValue(forKey: oldest)
+        }
+
+        lock.unlock()
         return decoded
+    }
+
+    /// Clear cache (e.g., after a full re-scan)
+    func clear() {
+        lock.lock()
+        cache.removeAll()
+        accessOrder.removeAll()
+        lock.unlock()
     }
 }
 

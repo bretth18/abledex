@@ -32,6 +32,11 @@ final class UpdateService {
     var currentBuild: String {
         Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "0"
     }
+    
+    var currentFullVersion: String {
+        // full version = version.build
+        "\(currentVersion).\(currentBuild)"
+    }
 
     private init() {}
 
@@ -88,7 +93,7 @@ final class UpdateService {
 
         var request = URLRequest(url: url)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
-        request.setValue("Abledex/\(currentVersion)", forHTTPHeaderField: "User-Agent")
+        request.setValue("Abledex/\(currentFullVersion)", forHTTPHeaderField: "User-Agent")
 
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
@@ -133,7 +138,7 @@ final class UpdateService {
             }
 
             // Compare versions
-            updateAvailable = isNewerVersion(versionString, than: currentVersion)
+            updateAvailable = isNewerVersion(versionString, than: currentFullVersion)
 
         } catch {
             errorMessage = "Failed to check for updates: \(error.localizedDescription)"

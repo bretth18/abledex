@@ -9,6 +9,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.theme) private var theme
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showStatistics = false
 
@@ -38,10 +39,10 @@ struct ContentView: View {
         } detail: {
             if let project = appState.selectedProject {
                 ProjectDetailView(project: project)
-                    .navigationSplitViewColumnWidth(min: 100, ideal: 180)
+                    .navigationSplitViewColumnWidth(min: 300, ideal: 350)
             } else {
                 ProjectDetailEmptyView()
-                    .navigationSplitViewColumnWidth(min: 40, ideal: 160, max: 200)
+                    .navigationSplitViewColumnWidth(min: 200, ideal: 250)
             }
         }
         .navigationSplitViewStyle(.balanced)

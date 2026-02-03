@@ -10,6 +10,7 @@ import SwiftUI
 @main
 struct AbledexApp: App {
     @State private var appState: AppState
+    @State private var themeManager = ThemeManager()
 
     init() {
         do {
@@ -24,6 +25,11 @@ struct AbledexApp: App {
         WindowGroup {
             ContentView()
                 .environment(appState)
+                .environment(themeManager)
+                .environment(\.theme, themeManager.current)
+                .preferredColorScheme(themeManager.current.preferredColorScheme)
+                .tint(themeManager.current.usesCustomBackground ? themeManager.current.accent : nil)
+                .windowBackground(themeManager.current.windowBackground)
                 .task {
                     await appState.loadData()
                     appState.startVolumeMonitoring()
@@ -75,6 +81,10 @@ struct AbledexApp: App {
         Settings {
             SettingsView()
                 .environment(appState)
+                .environment(themeManager)
+                .environment(\.theme, themeManager.current)
+                .preferredColorScheme(themeManager.current.preferredColorScheme)
+                .tint(themeManager.current.usesCustomBackground ? themeManager.current.accent : nil)
         }
         #endif
     }

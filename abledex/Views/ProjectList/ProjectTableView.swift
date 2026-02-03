@@ -9,6 +9,7 @@ import SwiftUI
 
 struct ProjectTableView: View {
     @Environment(AppState.self) private var appState
+    @Environment(\.theme) private var theme
     @State private var showDeleteConfirmation = false
     @State private var showBatchTagSheet = false
     @State private var batchTagInput = ""
@@ -57,7 +58,7 @@ struct ProjectTableView: View {
                 TableColumn("Status") { project in
                     HStack(spacing: 4) {
                         Image(systemName: project.completionStatus.icon)
-                            .foregroundStyle(statusColor(project.completionStatus))
+                            .foregroundStyle(theme.statusColor(for: project.completionStatus))
                         Text(project.completionStatus.label)
                             .font(.caption)
                     }
@@ -158,7 +159,8 @@ struct ProjectTableView: View {
                         }
                 }
             }
-            .tableStyle(.inset(alternatesRowBackgrounds: true))
+            .tableStyle(.inset(alternatesRowBackgrounds: !theme.usesCustomBackground))
+            .scrollContentBackground(theme.usesCustomBackground ? .hidden : .automatic)
             .onDeleteCommand {
                 if !appState.selectedProjectIDs.isEmpty {
                     showDeleteConfirmation = true
@@ -261,7 +263,7 @@ struct ProjectTableView: View {
         }
         .padding(.horizontal)
         .padding(.vertical, 8)
-        .background(.bar)
+        .background(theme.usesCustomBackground ? AnyShapeStyle(theme.barBackground) : AnyShapeStyle(.bar))
     }
 
     // MARK: - Batch Tag Sheet
@@ -336,6 +338,11 @@ struct ProjectTableView: View {
                 }
             }
 
+            Button("Re-scan \(appState.selectedProjectIDs.count) Projects") {
+                Task {
+                    await appState.rescanProjects(appState.selectedProjects)
+                }
+            }
             Divider()
             Button("Remove \(appState.selectedProjectIDs.count) Projects from Library", role: .destructive) {
                 showDeleteConfirmation = true
@@ -379,6 +386,11 @@ struct ProjectTableView: View {
                 }
             }
 
+            Button("Re-scan Project") {
+                Task {
+                    await appState.rescanProject(project)
+                }
+            }
             Divider()
             Button("Copy Path") {
                 NSPasteboard.general.clearContents()
@@ -393,15 +405,6 @@ struct ProjectTableView: View {
         }
     }
 
-    private func statusColor(_ status: CompletionStatus) -> Color {
-        switch status {
-        case .none: return .secondary
-        case .idea: return .yellow
-        case .inProgress: return .blue
-        case .mixing: return .purple
-        case .done: return .green
-        }
-    }
 }
 
 
