@@ -127,7 +127,17 @@ struct ProjectNSTableView: NSViewRepresentable {
         scrollView.autohidesScrollers = true
         scrollView.drawsBackground = false
 
-        let tableView = NSTableView()
+        let tableView = KeyHandlingTableView()
+        tableView.onReturnKey = { [weak coordinator = context.coordinator] in
+            guard let coordinator, let selected = coordinator.singleSelectedProject() else { return false }
+            coordinator.parent.onOpenProject(selected)
+            return true
+        }
+        tableView.onSpaceKey = { [weak coordinator = context.coordinator] in
+            guard let coordinator, let selected = coordinator.singleSelectedProject() else { return false }
+            coordinator.parent.onRevealProject(selected)
+            return true
+        }
         tableView.style = .inset
         tableView.usesAlternatingRowBackgroundColors = alternatesRowBackgrounds
         tableView.allowsMultipleSelection = true
@@ -270,7 +280,33 @@ struct ProjectNSTableView: NSViewRepresentable {
 
     // MARK: - Coordinator
 
+    /// Return opens, Space reveals — parity with the SwiftUI table's onKeyPress
+    /// bindings, which never reach an AppKit first responder.
+    final class KeyHandlingTableView: NSTableView {
+        var onReturnKey: (() -> Bool)?
+        var onSpaceKey: (() -> Bool)?
+
+        override func keyDown(with event: NSEvent) {
+            switch event.keyCode {
+            case 36, 76: // Return, keypad Enter
+                if onReturnKey?() == true { return }
+            case 49: // Space
+                if onSpaceKey?() == true { return }
+            default:
+                break
+            }
+            super.keyDown(with: event)
+        }
+    }
+
     final class Coordinator: NSObject, NSTableViewDelegate, NSTableViewDataSource, NSMenuDelegate {
+
+        func singleSelectedProject() -> ProjectRecord? {
+            guard let tableView, tableView.selectedRowIndexes.count == 1 else { return nil }
+            let row = tableView.selectedRow
+            guard row >= 0, row < currentProjects.count else { return nil }
+            return currentProjects[row]
+        }
         var parent: ProjectNSTableView
         var tableView: NSTableView?
         var currentProjects: [ProjectRecord] = []
@@ -674,10 +710,23 @@ struct ProjectNSTableView: NSViewRepresentable {
             let isMulti = selectedRows.count > 1 && selectedRows.contains(clickedRow)
 
             if isMulti {
-                menu.addItem(withTitle: "Open \(selectedRows.count) Projects in Ableton",
-                             action: #selector(openSelected(_:)), keyEquivalent: "")
-                menu.addItem(withTitle: "Reveal \(selectedRows.count) Projects in Finder",
-                             action: #selector(revealSelected(_:)), keyEquivalent: "")
+                // Snapshot UUIDs now — a scan/reload finishing while the menu is
+                // open replaces currentProjects, and row indexes resolved at click
+                // time would retarget different projects.
+                let selectedIDs = selectedRows.compactMap { index -> UUID? in
+                    guard index < currentProjects.count else { return nil }
+                    return currentProjects[index].id
+                }
+
+                let openItem = NSMenuItem(title: "Open \(selectedIDs.count) Projects in Ableton",
+                                          action: #selector(openSelected(_:)), keyEquivalent: "")
+                openItem.representedObject = selectedIDs
+                menu.addItem(openItem)
+
+                let revealItem = NSMenuItem(title: "Reveal \(selectedIDs.count) Projects in Finder",
+                                            action: #selector(revealSelected(_:)), keyEquivalent: "")
+                revealItem.representedObject = selectedIDs
+                menu.addItem(revealItem)
                 menu.addItem(.separator())
 
                 let statusMenu = NSMenu()
@@ -685,6 +734,7 @@ struct ProjectNSTableView: NSViewRepresentable {
                     let item = NSMenuItem(title: status.label, action: #selector(setStatusFromMenu(_:)), keyEquivalent: "")
                     item.image = NSImage(systemSymbolName: status.icon, accessibilityDescription: nil)
                     item.tag = status.rawValue
+                    item.representedObject = selectedIDs
                     item.target = self
                     statusMenu.addItem(item)
                 }
@@ -693,8 +743,9 @@ struct ProjectNSTableView: NSViewRepresentable {
                 menu.addItem(statusItem)
 
                 menu.addItem(.separator())
-                let deleteItem = NSMenuItem(title: "Remove \(selectedRows.count) Projects from Library",
+                let deleteItem = NSMenuItem(title: "Remove \(selectedIDs.count) Projects from Library",
                                             action: #selector(deleteSelected(_:)), keyEquivalent: "")
+                deleteItem.representedObject = selectedIDs
                 deleteItem.target = self
                 menu.addItem(deleteItem)
             } else {
@@ -797,34 +848,35 @@ struct ProjectNSTableView: NSViewRepresentable {
             NSPasteboard.general.setString(path, forType: .string)
         }
 
+        /// Resolves the UUID snapshot stored on a menu item back to live records.
+        private func snapshotProjects(from sender: NSMenuItem) -> [ProjectRecord] {
+            guard let ids = sender.representedObject as? [UUID] else { return [] }
+            let idSet = Set(ids)
+            return currentProjects.filter { idSet.contains($0.id) }
+        }
+
         @objc func openSelected(_ sender: NSMenuItem) {
-            guard let tableView else { return }
-            for index in tableView.selectedRowIndexes where index < currentProjects.count {
-                parent.onOpenProject(currentProjects[index])
+            for project in snapshotProjects(from: sender) {
+                parent.onOpenProject(project)
             }
         }
 
         @objc func revealSelected(_ sender: NSMenuItem) {
-            guard let tableView else { return }
-            for index in tableView.selectedRowIndexes where index < currentProjects.count {
-                parent.onRevealProject(currentProjects[index])
+            for project in snapshotProjects(from: sender) {
+                parent.onRevealProject(project)
             }
         }
 
         @objc func setStatusFromMenu(_ sender: NSMenuItem) {
-            guard let tableView, let status = CompletionStatus(rawValue: sender.tag) else { return }
-            for index in tableView.selectedRowIndexes where index < currentProjects.count {
-                parent.onSetStatus(currentProjects[index], status)
+            guard let status = CompletionStatus(rawValue: sender.tag) else { return }
+            for project in snapshotProjects(from: sender) {
+                parent.onSetStatus(project, status)
             }
         }
 
         @objc func deleteSelected(_ sender: NSMenuItem) {
-            guard let tableView else { return }
-            let ids = Set(tableView.selectedRowIndexes.compactMap { index -> UUID? in
-                guard index < currentProjects.count else { return nil }
-                return currentProjects[index].id
-            })
-            parent.onDeleteProjects(ids)
+            guard let ids = sender.representedObject as? [UUID] else { return }
+            parent.onDeleteProjects(Set(ids))
         }
 
         @objc func deleteSingle(_ sender: NSMenuItem) {

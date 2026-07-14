@@ -33,7 +33,17 @@ final class AppState {
     private var isBatchUpdating = false
     var locations: [LocationRecord] = []
     var collections: [CollectionRecord] = []
-    var selectedProjectIDs: Set<UUID> = []
+    var selectedProjectIDs: Set<UUID> = [] {
+        didSet {
+            // Low-frequency derived flags for the menu bar. Commands must NOT read
+            // selectedProjectIDs/projects directly: every mutation would rebuild the
+            // main menu, which crashes AppKit's menu impl when it lands mid-tracking
+            // (NSRangeException in NSContextMenuImpl). Only write on real transitions.
+            let single = selectedProjectIDs.count == 1
+            if hasSingleSelection != single { hasSingleSelection = single }
+        }
+    }
+    private(set) var hasSingleSelection = false
 
     // Volumes that have indexed projects but are not currently mounted.
     // Projects on offline drives stay in the index — tracking them is the app's core purpose.
@@ -340,6 +350,21 @@ final class AppState {
         }
 
         cachedFilteredProjects = result
+
+        // Prune selection to visible rows — otherwise the batch toolbar counts,
+        // detail pane, and Delete key keep acting on projects the user can't see.
+        let visibleIDs = Set(result.map(\.id))
+        if !selectedProjectIDs.isSubset(of: visibleIDs) {
+            selectedProjectIDs = selectedProjectIDs.intersection(visibleIDs)
+        }
+    }
+
+    /// True when any filter or search narrows the visible projects (sort excluded).
+    var hasActiveFilters: Bool {
+        !searchQuery.isEmpty || selectedFilter != .all || selectedVolumeFilter != nil ||
+        selectedStatusFilter != nil || selectedColorLabelFilter != nil || selectedTagFilter != nil ||
+        selectedPluginFilter != nil || selectedKeyFilter != nil || selectedFolderFilter != nil ||
+        selectedCollectionFilter != nil || showFavoritesOnly || showDuplicatesOnly
     }
 
     var selectedProject: ProjectRecord? {
@@ -870,11 +895,20 @@ final class AppState {
         workspaceObservers.removeAll()
     }
 
+    private var mountsBeingHandled: Set<String> = []
+
     private func handleVolumeMounted(url: URL, name: String) async {
         offlineVolumeNames.remove(name)
 
         // Respect the "Scan external volumes automatically" setting
         guard UserDefaults.standard.object(forKey: "scanExternalVolumes") as? Bool ?? true else { return }
+
+        // A single physical mount fires both DiskArbitration and NSWorkspace
+        // notifications — without this guard both race saveLocation into a
+        // UNIQUE(path) violation and the user gets a spurious error alert.
+        guard !mountsBeingHandled.contains(url.path) else { return }
+        mountsBeingHandled.insert(url.path)
+        defer { mountsBeingHandled.remove(url.path) }
 
         let existingLocation = try? await database.fetchLocation(byPath: url.path)
 
@@ -1190,11 +1224,13 @@ final class AppState {
     }
 
     func updateCollection(_ collection: CollectionRecord) async throws {
-        try await database.saveCollection(collection)
+        // Optimistic: apply in memory first so pickers don't visibly snap back
+        // while the save is in flight; the error alert covers the failure case.
         if let index = collections.firstIndex(where: { $0.id == collection.id }) {
             collections[index] = collection
         }
         sortCollections()
+        try await database.saveCollection(collection)
     }
 
     func deleteCollection(_ collection: CollectionRecord) async throws {
@@ -1241,6 +1277,23 @@ final class AppState {
 
     private func sortCollections() {
         collections.sort { $0.name.localizedCompare($1.name) == .orderedAscending }
+    }
+
+    /// Toggles a sidebar section filter (status/tag/plugin/...), resetting the
+    /// Library filter so two highlighted rows don't silently AND into an empty
+    /// table. Batched into a single recompute.
+    func toggleSectionFilter<T: Equatable>(_ keyPath: ReferenceWritableKeyPath<AppState, T?>, _ value: T) {
+        isBatchUpdating = true
+        if selectedFilter != .all {
+            selectedFilter = .all
+        }
+        if self[keyPath: keyPath] == value {
+            self[keyPath: keyPath] = nil
+        } else {
+            self[keyPath: keyPath] = value
+        }
+        isBatchUpdating = false
+        recomputeFilteredProjects()
     }
 
     func clearAllFilters() {

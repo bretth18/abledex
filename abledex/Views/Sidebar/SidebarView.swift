@@ -50,7 +50,12 @@ struct SidebarView: View {
             bottomBar
         }
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
-            sectionOrder = SidebarOrderStorage.order
+            // Fires on EVERY defaults write (sort persistence, column autosave...) —
+            // only touch state when the order actually changed to avoid full rebuilds.
+            let newOrder = SidebarOrderStorage.order
+            if sectionOrder != newOrder {
+                sectionOrder = newOrder
+            }
         }
         .sheet(isPresented: $showNewCollectionSheet) {
             newCollectionSheet
@@ -76,6 +81,7 @@ struct SidebarView: View {
                     }
                 }
             }
+            .disabled(renameText.trimmingCharacters(in: .whitespaces).isEmpty)
             Button("Cancel", role: .cancel) {}
         }
     }
@@ -106,11 +112,7 @@ struct SidebarView: View {
     private func musicProjectRow(_ collection: CollectionRecord) -> some View {
         let progress = appState.collectionProgress(collection)
         return Button {
-            if appState.selectedCollectionFilter == collection.id {
-                appState.selectedCollectionFilter = nil
-            } else {
-                appState.selectedCollectionFilter = collection.id
-            }
+            appState.toggleSectionFilter(\.selectedCollectionFilter, collection.id)
         } label: {
             Label {
                 HStack {
@@ -325,11 +327,7 @@ struct SidebarView: View {
         Section(isExpanded: expansionBinding(for: .status)) {
             ForEach(CompletionStatus.allCases, id: \.self) { status in
                 Button {
-                    if appState.selectedStatusFilter == status {
-                        appState.selectedStatusFilter = nil
-                    } else {
-                        appState.selectedStatusFilter = status
-                    }
+                    appState.toggleSectionFilter(\.selectedStatusFilter, status)
                 } label: {
                     Label {
                         HStack {
@@ -365,11 +363,7 @@ struct SidebarView: View {
                 let count = appState.colorLabelCount(for: label)
                 if count > 0 {
                     Button {
-                        if appState.selectedColorLabelFilter == label {
-                            appState.selectedColorLabelFilter = nil
-                        } else {
-                            appState.selectedColorLabelFilter = label
-                        }
+                        appState.toggleSectionFilter(\.selectedColorLabelFilter, label)
                     } label: {
                         Label {
                             HStack {
@@ -405,11 +399,7 @@ struct SidebarView: View {
             Section(isExpanded: expansionBinding(for: .plugins)) {
                 ForEach(appState.uniquePlugins.prefix(20), id: \.self) { plugin in
                     Button {
-                        if appState.selectedPluginFilter == plugin {
-                            appState.selectedPluginFilter = nil
-                        } else {
-                            appState.selectedPluginFilter = plugin
-                        }
+                        appState.toggleSectionFilter(\.selectedPluginFilter, plugin)
                     } label: {
                         Label {
                             HStack {
@@ -451,11 +441,7 @@ struct SidebarView: View {
             Section(isExpanded: expansionBinding(for: .keys)) {
                 ForEach(appState.uniqueKeys, id: \.self) { key in
                     Button {
-                        if appState.selectedKeyFilter == key {
-                            appState.selectedKeyFilter = nil
-                        } else {
-                            appState.selectedKeyFilter = key
-                        }
+                        appState.toggleSectionFilter(\.selectedKeyFilter, key)
                     } label: {
                         Label {
                             HStack {
@@ -492,11 +478,7 @@ struct SidebarView: View {
             Section(isExpanded: expansionBinding(for: .folders)) {
                 ForEach(foldersWithMultipleVersions.prefix(20), id: \.self) { folder in
                     Button {
-                        if appState.selectedFolderFilter == folder {
-                            appState.selectedFolderFilter = nil
-                        } else {
-                            appState.selectedFolderFilter = folder
-                        }
+                        appState.toggleSectionFilter(\.selectedFolderFilter, folder)
                     } label: {
                         Label {
                             HStack {
@@ -538,11 +520,7 @@ struct SidebarView: View {
             Section(isExpanded: expansionBinding(for: .tags)) {
                 ForEach(appState.uniqueTags, id: \.self) { tag in
                     Button {
-                        if appState.selectedTagFilter == tag {
-                            appState.selectedTagFilter = nil
-                        } else {
-                            appState.selectedTagFilter = tag
-                        }
+                        appState.toggleSectionFilter(\.selectedTagFilter, tag)
                     } label: {
                         Label {
                             HStack {
@@ -578,11 +556,7 @@ struct SidebarView: View {
             Section(isExpanded: expansionBinding(for: .volumes)) {
                 ForEach(appState.uniqueVolumes, id: \.self) { volume in
                     Button {
-                        if appState.selectedVolumeFilter == volume {
-                            appState.selectedVolumeFilter = nil
-                        } else {
-                            appState.selectedVolumeFilter = volume
-                        }
+                        appState.toggleSectionFilter(\.selectedVolumeFilter, volume)
                     } label: {
                         Label {
                             HStack {
@@ -730,16 +704,7 @@ struct SidebarView: View {
     // MARK: - Computed Properties
 
     private var hasActiveFilters: Bool {
-        appState.selectedStatusFilter != nil ||
-        appState.selectedColorLabelFilter != nil ||
-        appState.selectedVolumeFilter != nil ||
-        appState.selectedTagFilter != nil ||
-        appState.selectedPluginFilter != nil ||
-        appState.selectedKeyFilter != nil ||
-        appState.selectedFolderFilter != nil ||
-        appState.showFavoritesOnly ||
-        appState.showDuplicatesOnly ||
-        appState.selectedFilter != .all
+        appState.hasActiveFilters
     }
 
     private var foldersWithMultipleVersions: [String] {
@@ -749,16 +714,9 @@ struct SidebarView: View {
     // MARK: - Helper Functions
 
     private func clearAllFilters() {
-        appState.selectedStatusFilter = nil
-        appState.selectedColorLabelFilter = nil
-        appState.selectedVolumeFilter = nil
-        appState.selectedTagFilter = nil
-        appState.selectedPluginFilter = nil
-        appState.selectedKeyFilter = nil
-        appState.selectedFolderFilter = nil
-        appState.showFavoritesOnly = false
-        appState.showDuplicatesOnly = false
-        appState.selectedFilter = .all
+        // AppState's version also clears search + music-project filter and
+        // batches everything into one recompute.
+        appState.clearAllFilters()
     }
 
     @ViewBuilder

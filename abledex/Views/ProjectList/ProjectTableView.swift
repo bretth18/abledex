@@ -14,6 +14,7 @@ struct ProjectTableView: View {
     @State private var showDeleteConfirmation = false
     @State private var showBatchTagSheet = false
     @State private var batchTagInput = ""
+    @State private var sortOrder: [KeyPathComparator<ProjectRecord>] = []
 
     var body: some View {
         @Bindable var state = appState
@@ -24,7 +25,7 @@ struct ProjectTableView: View {
                 batchToolbar
             }
 
-            Table(of: ProjectRecord.self, selection: $state.selectedProjectIDs) {
+            Table(of: ProjectRecord.self, selection: $state.selectedProjectIDs, sortOrder: $sortOrder) {
                 TableColumn("") { project in
                     Button {
                         Task {
@@ -43,7 +44,7 @@ struct ProjectTableView: View {
                 }
                 .width(24)
 
-                TableColumn("Name") { project in
+                TableColumn("Name", value: \.name) { project in
                     HStack {
                         Image(systemName: "music.note")
                             .foregroundStyle(project.colorLabel.rawValue != 0 ? project.colorLabel.color : .secondary)
@@ -67,7 +68,7 @@ struct ProjectTableView: View {
                 }
                 .width(min: 150, ideal: 200)
 
-                TableColumn("Status") { project in
+                TableColumn("Status", value: \.sortableStatus) { project in
                     HStack(spacing: 4) {
                         Image(systemName: project.completionStatus.icon)
                             .foregroundStyle(theme.statusColor(for: project.completionStatus))
@@ -78,7 +79,7 @@ struct ProjectTableView: View {
                 }
                 .width(min: 80, ideal: 100)
 
-                TableColumn("BPM") { project in
+                TableColumn("BPM", value: \.sortableBPM) { project in
                     if let bpm = project.bpm {
                         Text(String(format: "%.0f", bpm))
                             .monospacedDigit()
@@ -89,7 +90,7 @@ struct ProjectTableView: View {
                 }
                 .width(50)
 
-                TableColumn("Created") { project in
+                TableColumn("Created", value: \.sortableCreated) { project in
                     if let date = project.createdDate {
                         Text(date, style: .date)
                             .foregroundStyle(.secondary)
@@ -100,7 +101,7 @@ struct ProjectTableView: View {
                 }
                 .width(min: 80, ideal: 100)
 
-                TableColumn("Modified") { project in
+                TableColumn("Modified", value: \.sortableModified) { project in
                     let date = project.modifiedDate ?? project.filesystemModifiedDate
                     // Formatted once — Text(_, style: .relative) schedules per-second
                     // re-renders for every visible row
@@ -109,7 +110,7 @@ struct ProjectTableView: View {
                 }
                 .width(min: 80, ideal: 100)
 
-                TableColumn("Tracks") { project in
+                TableColumn("Tracks", value: \.totalTrackCount) { project in
                     HStack(spacing: 4) {
                         if project.audioTrackCount > 0 {
                             Label("\(project.audioTrackCount)", systemImage: "waveform")
@@ -124,7 +125,7 @@ struct ProjectTableView: View {
                 }
                 .width(min: 60, ideal: 80)
 
-                TableColumn("Duration") { project in
+                TableColumn("Duration", value: \.sortableDuration) { project in
                     if let duration = project.formattedDuration {
                         Text(duration)
                             .monospacedDigit()
@@ -136,7 +137,7 @@ struct ProjectTableView: View {
                 }
                 .width(60)
 
-                TableColumn("Version") { project in
+                TableColumn("Version", value: \.sortableVersion) { project in
                     if let version = project.abletonVersion {
                         Text(version)
                             .font(.caption)
@@ -195,6 +196,7 @@ struct ProjectTableView: View {
                         }
                     } else if !appState.searchQuery.isEmpty {
                         ContentUnavailableView.search(text: appState.searchQuery)
+                            .allowsHitTesting(false) // no actions — don't swallow table clicks
                     } else {
                         ContentUnavailableView {
                             Label("No Matching Projects", systemImage: "line.3.horizontal.decrease.circle")
@@ -250,6 +252,58 @@ struct ProjectTableView: View {
         .sheet(isPresented: $showBatchTagSheet) {
             batchTagSheet
         }
+        .onAppear {
+            syncSortOrderFromAppState()
+        }
+        .onChange(of: sortOrder) {
+            applySortOrderToAppState()
+        }
+        .onChange(of: appState.sortColumn) {
+            syncSortOrderFromAppState()
+        }
+        .onChange(of: appState.sortAscending) {
+            syncSortOrderFromAppState()
+        }
+    }
+
+    // MARK: - Header Sort Sync
+
+    private func syncSortOrderFromAppState() {
+        let order: SortOrder = appState.sortAscending ? .forward : .reverse
+        switch appState.sortColumn {
+        case .name: sortOrder = [KeyPathComparator(\.name, order: order)]
+        case .status: sortOrder = [KeyPathComparator(\.sortableStatus, order: order)]
+        case .bpm: sortOrder = [KeyPathComparator(\.sortableBPM, order: order)]
+        case .createdDate: sortOrder = [KeyPathComparator(\.sortableCreated, order: order)]
+        case .modifiedDate: sortOrder = [KeyPathComparator(\.sortableModified, order: order)]
+        case .tracks: sortOrder = [KeyPathComparator(\.totalTrackCount, order: order)]
+        case .duration: sortOrder = [KeyPathComparator(\.sortableDuration, order: order)]
+        case .version: sortOrder = [KeyPathComparator(\.sortableVersion, order: order)]
+        case .lastOpened: sortOrder = [] // not shown as a column
+        }
+    }
+
+    private func applySortOrderToAppState() {
+        guard let comparator = sortOrder.first else { return }
+
+        let column: SortColumn?
+        switch comparator.keyPath {
+        case \ProjectRecord.name: column = .name
+        case \ProjectRecord.sortableStatus: column = .status
+        case \ProjectRecord.sortableBPM: column = .bpm
+        case \ProjectRecord.sortableCreated: column = .createdDate
+        case \ProjectRecord.sortableModified: column = .modifiedDate
+        case \ProjectRecord.totalTrackCount: column = .tracks
+        case \ProjectRecord.sortableDuration: column = .duration
+        case \ProjectRecord.sortableVersion: column = .version
+        default: column = nil
+        }
+        guard let column else { return }
+
+        // Change-guarded so the round-trip through appState can't loop
+        let ascending = comparator.order == .forward
+        if appState.sortColumn != column { appState.sortColumn = column }
+        if appState.sortAscending != ascending { appState.sortAscending = ascending }
     }
 
     // MARK: - Batch Toolbar
@@ -357,7 +411,9 @@ struct ProjectTableView: View {
 
     @ViewBuilder
     private func contextMenu(for project: ProjectRecord) -> some View {
-        if appState.selectedProjectIDs.count > 1 {
+        // Batch menu only when the clicked row is part of the multi-selection —
+        // right-clicking an unselected row must act on that row, not the others.
+        if appState.selectedProjectIDs.count > 1 && appState.selectedProjectIDs.contains(project.id) {
             // Multi-selection context menu
             Button("Open \(appState.selectedProjectIDs.count) Projects in Ableton") {
                 for proj in appState.selectedProjects {
@@ -498,6 +554,16 @@ struct ProjectTableView: View {
             }
         }
     }
+}
+
+// Non-optional surrogates so optional fields get Comparable sort keypaths
+private extension ProjectRecord {
+    var sortableStatus: Int { completionStatus.rawValue }
+    var sortableBPM: Double { bpm ?? 0 }
+    var sortableCreated: Date { createdDate ?? filesystemModifiedDate }
+    var sortableModified: Date { modifiedDate ?? filesystemModifiedDate }
+    var sortableDuration: Double { duration ?? 0 }
+    var sortableVersion: String { abletonVersion ?? "" }
 }
 
 

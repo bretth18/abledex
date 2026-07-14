@@ -103,9 +103,12 @@ struct AbledexApp: App {
                     }
                 }
                 .keyboardShortcut("e", modifiers: [.command, .shift])
-                .disabled(appState.filteredProjects.isEmpty)
             }
 
+            // NB: items here read only low-frequency state (hasSingleSelection) —
+            // reading selectedProject/projects would rebuild the main menu on every
+            // selection change or scan batch, which can crash AppKit's menu system
+            // when the rebuild lands while a menu is open.
             CommandMenu("Project") {
                 Button("Open in Ableton Live") {
                     if let project = appState.selectedProject {
@@ -113,7 +116,7 @@ struct AbledexApp: App {
                     }
                 }
                 .keyboardShortcut(.return, modifiers: .command)
-                .disabled(appState.selectedProject == nil)
+                .disabled(!appState.hasSingleSelection)
 
                 Button("Reveal in Finder") {
                     if let project = appState.selectedProject {
@@ -121,11 +124,11 @@ struct AbledexApp: App {
                     }
                 }
                 .keyboardShortcut("r", modifiers: .command)
-                .disabled(appState.selectedProject == nil)
+                .disabled(!appState.hasSingleSelection)
 
                 Divider()
 
-                Button(appState.selectedProject?.isFavorite == true ? "Remove Favorite" : "Add Favorite") {
+                Button("Toggle Favorite") {
                     if let project = appState.selectedProject {
                         Task {
                             do {
@@ -137,7 +140,7 @@ struct AbledexApp: App {
                     }
                 }
                 .keyboardShortcut("l", modifiers: .command)
-                .disabled(appState.selectedProject == nil)
+                .disabled(!appState.hasSingleSelection)
             }
 
             CommandGroup(replacing: .help) {
