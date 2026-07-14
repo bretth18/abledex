@@ -18,6 +18,9 @@ struct StatisticsView: View {
     @State private var cachedTotalStorage: Int64 = 0
     @State private var isLoadingStorage = true
 
+    // Cached derived stats to avoid recomputing aggregations on every render
+    @State private var stats = ProjectStats()
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
@@ -53,9 +56,9 @@ struct StatisticsView: View {
                         dismiss()
                     }
 
-                    StatCard(title: "Avg BPM", value: averageBPM, icon: "metronome", color: .orange)
+                    StatCard(title: "Avg BPM", value: stats.averageBPM, icon: "metronome", color: .orange)
 
-                    StatCard(title: "Total Duration", value: totalDuration, icon: "clock", color: .purple)
+                    StatCard(title: "Total Duration", value: stats.totalDuration, icon: "clock", color: .purple)
                 }
 
                 Divider()
@@ -67,28 +70,26 @@ struct StatisticsView: View {
 
                     HStack(spacing: 24) {
                         // Chart
-                        if #available(macOS 14.0, *) {
-                            Chart(statusData, id: \.status) { item in
-                                SectorMark(
-                                    angle: .value("Count", item.count),
-                                    innerRadius: .ratio(0.5),
-                                    angularInset: 2
-                                )
-                                .foregroundStyle(item.color)
-                                .annotation(position: .overlay) {
-                                    if item.count > 0 {
-                                        Text("\(item.count)")
-                                            .font(.caption.bold())
-                                            .foregroundStyle(.white)
-                                    }
+                        Chart(stats.statusData, id: \.status) { item in
+                            SectorMark(
+                                angle: .value("Count", item.count),
+                                innerRadius: .ratio(0.5),
+                                angularInset: 2
+                            )
+                            .foregroundStyle(theme.statusColor(for: item.status))
+                            .annotation(position: .overlay) {
+                                if item.count > 0 {
+                                    Text("\(item.count)")
+                                        .font(.caption.bold())
+                                        .foregroundStyle(.white)
                                 }
                             }
-                            .frame(width: 200, height: 200)
                         }
+                        .frame(width: 200, height: 200)
 
                         // Legend (clickable)
                         VStack(alignment: .leading, spacing: 8) {
-                            ForEach(statusData, id: \.status) { item in
+                            ForEach(stats.statusData, id: \.status) { item in
                                 Button {
                                     appState.clearAllFilters()
                                     appState.selectedStatusFilter = item.status
@@ -96,7 +97,7 @@ struct StatisticsView: View {
                                 } label: {
                                     HStack {
                                         Circle()
-                                            .fill(item.color)
+                                            .fill(theme.statusColor(for: item.status))
                                             .frame(width: 12, height: 12)
                                         Text(item.status.label)
                                         Spacer()
@@ -173,13 +174,13 @@ struct StatisticsView: View {
                     Text("Key Distribution")
                         .font(.headline)
 
-                    if keyDistribution.isEmpty {
+                    if stats.keyDistribution.isEmpty {
                         Text("No key data available")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     } else {
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                            ForEach(keyDistribution.prefix(12), id: \.key) { item in
+                            ForEach(stats.keyDistribution.prefix(12), id: \.key) { item in
                                 Button {
                                     appState.clearAllFilters()
                                     appState.selectedKeyFilter = item.key
@@ -217,32 +218,14 @@ struct StatisticsView: View {
                     Text("BPM Distribution")
                         .font(.headline)
 
-                    if #available(macOS 14.0, *) {
-                        Chart(bpmDistribution, id: \.range) { item in
-                            BarMark(
-                                x: .value("BPM Range", item.range),
-                                y: .value("Count", item.count)
-                            )
-                            .foregroundStyle(theme.chartPrimary.gradient)
-                        }
-                        .frame(height: 200)
-                    } else {
-                        HStack(alignment: .bottom, spacing: 4) {
-                            ForEach(bpmDistribution, id: \.range) { item in
-                                VStack {
-                                    Text("\(item.count)")
-                                        .font(.caption2)
-                                    Rectangle()
-                                        .fill(theme.chartPrimary)
-                                        .frame(width: 40, height: CGFloat(item.count) * 5)
-                                    Text(item.range)
-                                        .font(.caption2)
-                                        .rotationEffect(.degrees(-45))
-                                }
-                            }
-                        }
-                        .frame(height: 200)
+                    Chart(stats.bpmDistribution, id: \.range) { item in
+                        BarMark(
+                            x: .value("BPM Range", item.range),
+                            y: .value("Count", item.count)
+                        )
+                        .foregroundStyle(theme.chartPrimary.gradient)
                     }
+                    .frame(height: 200)
                 }
 
                 Divider()
@@ -254,27 +237,25 @@ struct StatisticsView: View {
 
                     HStack(spacing: 24) {
                         // Weekly chart
-                        if #available(macOS 14.0, *) {
-                            VStack(alignment: .leading) {
-                                Text("Projects Created (Last 6 Months)")
-                                    .font(.subheadline)
-                                    .foregroundStyle(.secondary)
+                        VStack(alignment: .leading) {
+                            Text("Projects Created (Last 6 Months)")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
 
-                                Chart(projectsByWeek, id: \.week) { item in
-                                    AreaMark(
-                                        x: .value("Week", item.week, unit: .weekOfYear),
-                                        y: .value("Count", item.count)
-                                    )
-                                    .foregroundStyle(theme.chartSecondary.opacity(0.3))
+                            Chart(stats.projectsByWeek, id: \.week) { item in
+                                AreaMark(
+                                    x: .value("Week", item.week, unit: .weekOfYear),
+                                    y: .value("Count", item.count)
+                                )
+                                .foregroundStyle(theme.chartSecondary.opacity(0.3))
 
-                                    LineMark(
-                                        x: .value("Week", item.week, unit: .weekOfYear),
-                                        y: .value("Count", item.count)
-                                    )
-                                    .foregroundStyle(theme.chartSecondary)
-                                }
-                                .frame(height: 150)
+                                LineMark(
+                                    x: .value("Week", item.week, unit: .weekOfYear),
+                                    y: .value("Count", item.count)
+                                )
+                                .foregroundStyle(theme.chartSecondary)
                             }
+                            .frame(height: 150)
                         }
 
                         // Day of week breakdown
@@ -283,13 +264,13 @@ struct StatisticsView: View {
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
 
-                            ForEach(projectsByDayOfWeek, id: \.day) { item in
+                            ForEach(stats.projectsByDayOfWeek, id: \.day) { item in
                                 HStack {
                                     Text(item.day)
                                         .font(.caption)
                                         .frame(width: 40, alignment: .leading)
                                     GeometryReader { geometry in
-                                        let maxCount = Double(projectsByDayOfWeek.map(\.count).max() ?? 1)
+                                        let maxCount = Double(stats.maxProjectsPerDayOfWeek)
                                         let width = maxCount > 0 ? (Double(item.count) / maxCount) * geometry.size.width : 0
                                         RoundedRectangle(cornerRadius: 3)
                                             .fill(theme.chartSecondary.gradient)
@@ -307,8 +288,8 @@ struct StatisticsView: View {
                     }
 
                     HStack(spacing: 16) {
-                        StatMiniCard(title: "Most Productive", value: mostProductiveDay, icon: "flame")
-                        StatMiniCard(title: "Avg/Week", value: averageProjectsPerWeek, icon: "chart.line.uptrend.xyaxis")
+                        StatMiniCard(title: "Most Productive", value: stats.mostProductiveDay, icon: "flame")
+                        StatMiniCard(title: "Avg/Week", value: stats.averageProjectsPerWeek, icon: "chart.line.uptrend.xyaxis")
                     }
                 }
 
@@ -319,13 +300,13 @@ struct StatisticsView: View {
                     Text("Most Used Plugins")
                         .font(.headline)
 
-                    if topPlugins.isEmpty {
+                    if stats.topPlugins.isEmpty {
                         Text("No plugin data available")
                             .foregroundStyle(.secondary)
                             .font(.caption)
                     } else {
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                            ForEach(topPlugins.prefix(10), id: \.name) { plugin in
+                            ForEach(stats.topPlugins.prefix(10), id: \.name) { plugin in
                                 Button {
                                     appState.clearAllFilters()
                                     appState.selectedPluginFilter = plugin.name
@@ -356,25 +337,48 @@ struct StatisticsView: View {
                     Text("Projects by Month")
                         .font(.headline)
 
-                    if #available(macOS 14.0, *) {
-                        Chart(projectsByMonth, id: \.month) { item in
-                            BarMark(
-                                x: .value("Month", item.month, unit: .month),
-                                y: .value("Count", item.count)
-                            )
-                            .foregroundStyle(theme.chartPrimary.gradient)
-                        }
-                        .frame(height: 200)
+                    Chart(stats.projectsByMonth, id: \.month) { item in
+                        BarMark(
+                            x: .value("Month", item.month, unit: .month),
+                            y: .value("Count", item.count)
+                        )
+                        .foregroundStyle(theme.chartPrimary.gradient)
                     }
+                    .frame(height: 200)
                 }
             }
             .padding()
         }
         .frame(minWidth: 700, idealWidth: 800, minHeight: 600, idealHeight: 700)
         .background(theme.usesCustomBackground ? theme.background.ignoresSafeArea() : nil)
-        .task {
+        .task(id: statsTaskID) {
+            await computeStats()
             await loadStorageData()
         }
+    }
+
+    // MARK: - Stats Invalidation
+
+    /// Cheap Equatable key that changes whenever projects are added, removed, or re-indexed.
+    private struct StatsTaskID: Equatable {
+        let projectCount: Int
+        let latestIndexDate: Date?
+    }
+
+    private var statsTaskID: StatsTaskID {
+        StatsTaskID(
+            projectCount: appState.projects.count,
+            latestIndexDate: appState.projects.map(\.lastIndexedAt).max()
+        )
+    }
+
+    // MARK: - Async Stats Computation
+
+    private func computeStats() async {
+        let projects = appState.projects
+        stats = await Task.detached(priority: .userInitiated) {
+            ProjectStats(projects: projects)
+        }.value
     }
 
     // MARK: - Async Storage Loading
@@ -412,35 +416,39 @@ struct StatisticsView: View {
         isLoadingStorage = false
     }
 
-    // MARK: - Computed Stats
+    // MARK: - Storage Stats
 
-    private var averageBPM: String {
-        let bpms = appState.projects.compactMap { $0.bpm }
-        guard !bpms.isEmpty else { return "-" }
-        let avg = bpms.reduce(0, +) / Double(bpms.count)
-        return String(format: "%.0f", avg)
+    private func formatBytes(_ bytes: Int64) -> String {
+        let formatter = ByteCountFormatter()
+        formatter.countStyle = .file
+        return formatter.string(fromByteCount: bytes)
     }
+}
 
-    private var totalDuration: String {
-        let total = appState.projects.compactMap { $0.duration }.reduce(0, +)
-        let hours = Int(total) / 3600
-        let minutes = (Int(total) % 3600) / 60
-        if hours > 0 {
-            return "\(hours)h \(minutes)m"
-        } else {
-            return "\(minutes)m"
-        }
-    }
+// MARK: - Project Stats
 
-    private var statusData: [(status: CompletionStatus, count: Int, color: Color)] {
-        CompletionStatus.allCases.map { status in
-            let count = appState.projects.filter { $0.completionStatus == status }.count
-            return (status, count, theme.statusColor(for: status))
-        }
-    }
+/// All derived statistics for the projects list, computed in a single pass
+/// so the view body only reads precomputed values.
+private struct ProjectStats: Sendable {
+    var averageBPM = "-"
+    var totalDuration = "0m"
+    var statusData: [(status: CompletionStatus, count: Int)] = []
+    var bpmDistribution: [(range: String, count: Int)] = []
+    var topPlugins: [(name: String, count: Int)] = []
+    var keyDistribution: [(key: String, camelot: String?, count: Int)] = []
+    var projectsByMonth: [(month: Date, count: Int)] = []
+    var projectsByWeek: [(week: Date, count: Int)] = []
+    var projectsByDayOfWeek: [(day: String, count: Int)] = []
+    var maxProjectsPerDayOfWeek = 0
+    var mostProductiveDay = "-"
+    var averageProjectsPerWeek = "-"
 
-    private var bpmDistribution: [(range: String, count: Int)] {
-        let ranges = [
+    init() {}
+
+    init(projects: [ProjectRecord]) {
+        let calendar = Calendar.current
+
+        let bpmRanges = [
             ("< 80", 0..<80),
             ("80-99", 80..<100),
             ("100-119", 100..<120),
@@ -449,110 +457,94 @@ struct StatisticsView: View {
             ("160+", 160..<500)
         ]
 
-        return ranges.map { (label, range) in
-            let count = appState.projects.filter { project in
-                guard let bpm = project.bpm else { return false }
-                return range.contains(Int(bpm))
-            }.count
-            return (label, count)
-        }
-    }
-
-    private var topPlugins: [(name: String, count: Int)] {
+        var bpmSum = 0.0
+        var bpmCount = 0
+        var durationTotal = 0.0
+        var statusCounts: [CompletionStatus: Int] = [:]
+        var bpmRangeCounts = [Int](repeating: 0, count: bpmRanges.count)
         var pluginCounts: [String: Int] = [:]
-        for project in appState.projects {
+        var keyCounts: [String: Int] = [:]
+        var monthCounts: [Date: Int] = [:]
+        var weekCounts: [Date: Int] = [:]
+        var dayCounts: [Int: Int] = [:]
+
+        for project in projects {
+            if let bpm = project.bpm {
+                bpmSum += bpm
+                bpmCount += 1
+                let bpmInt = Int(bpm)
+                if let rangeIndex = bpmRanges.firstIndex(where: { $0.1.contains(bpmInt) }) {
+                    bpmRangeCounts[rangeIndex] += 1
+                }
+            }
+
+            if let duration = project.duration {
+                durationTotal += duration
+            }
+
+            statusCounts[project.completionStatus, default: 0] += 1
+
             for plugin in project.plugins {
                 pluginCounts[plugin, default: 0] += 1
             }
-        }
-        return pluginCounts
-            .map { ($0.key, $0.value) }
-            .sorted { $0.1 > $1.1 }
-    }
 
-    private var projectsByMonth: [(month: Date, count: Int)] {
-        let calendar = Calendar.current
-        var monthCounts: [Date: Int] = [:]
+            for key in project.musicalKeys {
+                keyCounts[key, default: 0] += 1
+            }
 
-        for project in appState.projects {
             let date = project.createdDate ?? project.filesystemModifiedDate
             if let monthStart = calendar.date(from: calendar.dateComponents([.year, .month], from: date)) {
                 monthCounts[monthStart, default: 0] += 1
             }
-        }
-
-        return monthCounts
-            .map { ($0.key, $0.value) }
-            .sorted { $0.0 < $1.0 }
-            .suffix(12)
-            .map { $0 }
-    }
-
-    // MARK: - Storage Stats
-
-    private func formatBytes(_ bytes: Int64) -> String {
-        let formatter = ByteCountFormatter()
-        formatter.countStyle = .file
-        return formatter.string(fromByteCount: bytes)
-    }
-
-    // MARK: - Key Distribution
-
-    private var keyDistribution: [(key: String, camelot: String?, count: Int)] {
-        var keyCounts: [String: Int] = [:]
-        for project in appState.projects {
-            for key in project.musicalKeys {
-                keyCounts[key, default: 0] += 1
-            }
-        }
-        return keyCounts
-            .map { (key: $0.key, camelot: CamelotConverter.toCamelot($0.key), count: $0.value) }
-            .sorted { $0.count > $1.count }
-    }
-
-    // MARK: - Activity Trends
-
-    private var projectsByWeek: [(week: Date, count: Int)] {
-        let calendar = Calendar.current
-        var weekCounts: [Date: Int] = [:]
-
-        for project in appState.projects {
-            let date = project.createdDate ?? project.filesystemModifiedDate
             if let weekStart = calendar.date(from: calendar.dateComponents([.yearForWeekOfYear, .weekOfYear], from: date)) {
                 weekCounts[weekStart, default: 0] += 1
             }
+            dayCounts[calendar.component(.weekday, from: date), default: 0] += 1
         }
 
-        return weekCounts
-            .map { ($0.key, $0.value) }
-            .sorted { $0.0 < $1.0 }
+        if bpmCount > 0 {
+            averageBPM = String(format: "%.0f", bpmSum / Double(bpmCount))
+        }
+
+        let hours = Int(durationTotal) / 3600
+        let minutes = (Int(durationTotal) % 3600) / 60
+        totalDuration = hours > 0 ? "\(hours)h \(minutes)m" : "\(minutes)m"
+
+        statusData = CompletionStatus.allCases.map { (status: $0, count: statusCounts[$0] ?? 0) }
+
+        bpmDistribution = zip(bpmRanges, bpmRangeCounts).map { range, count in
+            (range: range.0, count: count)
+        }
+
+        topPlugins = pluginCounts
+            .map { (name: $0.key, count: $0.value) }
+            .sorted { $0.count > $1.count }
+
+        keyDistribution = keyCounts
+            .map { (key: $0.key, camelot: CamelotConverter.toCamelot($0.key), count: $0.value) }
+            .sorted { $0.count > $1.count }
+
+        projectsByMonth = monthCounts
+            .map { (month: $0.key, count: $0.value) }
+            .sorted { $0.month < $1.month }
+            .suffix(12)
+            .map { $0 }
+
+        projectsByWeek = weekCounts
+            .map { (week: $0.key, count: $0.value) }
+            .sorted { $0.week < $1.week }
             .suffix(24)
             .map { $0 }
-    }
-
-    private var projectsByDayOfWeek: [(day: String, count: Int)] {
-        let calendar = Calendar.current
-        var dayCounts: [Int: Int] = [:]
-
-        for project in appState.projects {
-            let date = project.createdDate ?? project.filesystemModifiedDate
-            let weekday = calendar.component(.weekday, from: date)
-            dayCounts[weekday, default: 0] += 1
-        }
 
         let dayNames = ["", "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
-        return (1...7).map { (dayNames[$0], dayCounts[$0] ?? 0) }
-    }
+        projectsByDayOfWeek = (1...7).map { (day: dayNames[$0], count: dayCounts[$0] ?? 0) }
+        maxProjectsPerDayOfWeek = projectsByDayOfWeek.map(\.count).max() ?? 0
+        mostProductiveDay = projectsByDayOfWeek.max(by: { $0.count < $1.count })?.day ?? "-"
 
-    private var mostProductiveDay: String {
-        projectsByDayOfWeek.max(by: { $0.count < $1.count })?.day ?? "-"
-    }
-
-    private var averageProjectsPerWeek: String {
-        guard !projectsByWeek.isEmpty else { return "-" }
-        let total = projectsByWeek.reduce(0) { $0 + $1.count }
-        let avg = Double(total) / Double(projectsByWeek.count)
-        return String(format: "%.1f", avg)
+        if !projectsByWeek.isEmpty {
+            let weekTotal = projectsByWeek.reduce(0) { $0 + $1.count }
+            averageProjectsPerWeek = String(format: "%.1f", Double(weekTotal) / Double(projectsByWeek.count))
+        }
     }
 }
 

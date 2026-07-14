@@ -8,6 +8,19 @@
 import Foundation
 import Compression
 
+/// A sample file reference extracted from a `<FileRef>` block.
+/// Modern Live (10/11/12) stores both an absolute `<Path Value="...">` and a
+/// project-relative `<RelativePath Value="...">`. Either may be absent.
+struct SampleFileReference: Sendable, Hashable {
+    let absolutePath: String?
+    let relativePath: String?
+
+    nonisolated init(absolutePath: String? = nil, relativePath: String? = nil) {
+        self.absolutePath = absolutePath
+        self.relativePath = relativePath
+    }
+}
+
 struct ParsedProjectData: Sendable {
     var bpm: Double?
     var timeSignatureNumerator: Int?
@@ -19,6 +32,7 @@ struct ParsedProjectData: Sendable {
     var abletonMinorVersion: String?
     var duration: Double?
     var samplePaths: [String] = []
+    var sampleFileReferences: [SampleFileReference] = []
     var plugins: [String] = []
     var musicalKeys: [String] = []
 
@@ -33,6 +47,7 @@ struct ParsedProjectData: Sendable {
         abletonMinorVersion: String? = nil,
         duration: Double? = nil,
         samplePaths: [String] = [],
+        sampleFileReferences: [SampleFileReference] = [],
         plugins: [String] = [],
         musicalKeys: [String] = []
     ) {
@@ -46,6 +61,7 @@ struct ParsedProjectData: Sendable {
         self.abletonMinorVersion = abletonMinorVersion
         self.duration = duration
         self.samplePaths = samplePaths
+        self.sampleFileReferences = sampleFileReferences
         self.plugins = plugins
         self.musicalKeys = musicalKeys
     }
@@ -243,6 +259,13 @@ struct ALSParser: Sendable {
             result.abletonVersion = String(headerSection[creatorStart.upperBound..<creatorEnd.lowerBound])
         }
 
+        // Parse MinorVersion attribute from the <Ableton ...> header element
+        if let minorStart = headerSection.range(of: "MinorVersion=\""),
+           let minorEnd = headerSection.range(of: "\"", range: minorStart.upperBound..<headerSection.endIndex) {
+            let value = String(headerSection[minorStart.upperBound..<minorEnd.lowerBound])
+            result.abletonMinorVersion = value.isEmpty ? nil : value
+        }
+
         // Parse BPM - extract from Tempo block
         result.bpm = extractBPM(from: xmlString)
 
@@ -266,6 +289,10 @@ struct ALSParser: Sendable {
 
         // Extract sample count (not full paths to save memory)
         result.samplePaths = extractSampleNames(from: xmlString)
+
+        // Extract full sample file references (absolute + relative paths)
+        // for missing-sample detection
+        result.sampleFileReferences = extractSampleFileReferences(from: xmlString)
 
         // Extract musical keys from scale information
         result.musicalKeys = extractMusicalKeys(from: xmlString)
@@ -336,6 +363,70 @@ struct ALSParser: Sendable {
         }
 
         return Array(names).sorted()
+    }
+
+    /// Extracts sample file references from `<FileRef>` blocks.
+    /// Handles the modern (Live 10/11/12) attribute form:
+    ///   `<FileRef>...<RelativePath Value="Samples/x.wav" />...<Path Value="/abs/x.wav" />...</FileRef>`
+    /// Older formats that store the path as nested elements yield no attribute
+    /// matches and are simply skipped (name-based extraction still covers them).
+    private nonisolated func extractSampleFileReferences(from xmlString: String) -> [SampleFileReference] {
+        var references: [SampleFileReference] = []
+        var seen: Set<SampleFileReference> = []
+        var searchStart = xmlString.startIndex
+
+        // Only look at <FileRef> blocks inside <SampleRef> containers. Live uses
+        // FileRef for many non-sample things — device/VST preset paths, skin files,
+        // OriginalFileRef history — and stale preset paths are extremely common in
+        // healthy sets, so scanning every FileRef produces false "missing samples".
+        while references.count < 500, // Same cap as sample name extraction
+              let sampleRefOpen = xmlString.range(of: "<SampleRef>", range: searchStart..<xmlString.endIndex) {
+            let sampleRefEnd = xmlString.range(of: "</SampleRef>", range: sampleRefOpen.upperBound..<xmlString.endIndex)?.lowerBound
+                ?? xmlString.index(sampleRefOpen.upperBound, offsetBy: 4000, limitedBy: xmlString.endIndex)
+                ?? xmlString.endIndex
+            searchStart = sampleRefEnd
+
+            guard let fileRefOpen = xmlString.range(of: "<FileRef", range: sampleRefOpen.upperBound..<sampleRefEnd) else {
+                continue
+            }
+            let blockEnd = xmlString.range(of: "</FileRef>", range: fileRefOpen.upperBound..<sampleRefEnd)?.lowerBound
+                ?? sampleRefEnd
+
+            let block = xmlString[fileRefOpen.upperBound..<blockEnd]
+            let absolutePath = extractAttributeValue(in: block, afterTag: "<Path Value=\"")
+            let relativePath = extractAttributeValue(in: block, afterTag: "<RelativePath Value=\"")
+
+            guard absolutePath != nil || relativePath != nil else { continue }
+
+            let reference = SampleFileReference(absolutePath: absolutePath, relativePath: relativePath)
+            if seen.insert(reference).inserted {
+                references.append(reference)
+            }
+        }
+
+        return references
+    }
+
+    /// Returns the attribute value following `tag` within `block`, XML-unescaped.
+    /// Returns nil when the tag is absent or the value is empty.
+    private nonisolated func extractAttributeValue(in block: Substring, afterTag tag: String) -> String? {
+        guard let start = block.range(of: tag),
+              let end = block.range(of: "\"", range: start.upperBound..<block.endIndex) else {
+            return nil
+        }
+        let value = unescapeXMLEntities(String(block[start.upperBound..<end.lowerBound]))
+        return value.isEmpty ? nil : value
+    }
+
+    /// Decodes the five predefined XML entities (paths may contain & or ')
+    private nonisolated func unescapeXMLEntities(_ string: String) -> String {
+        guard string.contains("&") else { return string }
+        return string
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&apos;", with: "'")
+            .replacingOccurrences(of: "&amp;", with: "&")
     }
 
     private nonisolated func extractPlugins(from xmlString: String) -> [String] {

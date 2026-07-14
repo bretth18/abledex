@@ -107,6 +107,7 @@ struct ProjectNSTableView: NSViewRepresentable {
     let sortAscending: Bool
     let alternatesRowBackgrounds: Bool
     let onSelectionChanged: (Set<UUID>) -> Void
+    let onSortChanged: (SortColumn, Bool) -> Void
     let onFavoriteToggle: (ProjectRecord) -> Void
     let onOpenProject: (ProjectRecord) -> Void
     let onRevealProject: (ProjectRecord) -> Void
@@ -157,6 +158,14 @@ struct ProjectNSTableView: NSViewRepresentable {
             tableView.addTableColumn(nsColumn)
         }
 
+        // Persist column widths/order across launches (identifiers are stable strings)
+        tableView.autosaveName = "ProjectTable"
+        tableView.autosaveTableColumns = true
+
+        // Seed the current sort so the first header click toggles correctly.
+        // Set before the dataSource is attached so it doesn't fire sortDescriptorsDidChange.
+        tableView.sortDescriptors = [NSSortDescriptor(key: sortColumn.rawValue, ascending: sortAscending)]
+
         tableView.delegate = context.coordinator
         tableView.dataSource = context.coordinator
 
@@ -189,23 +198,38 @@ struct ProjectNSTableView: NSViewRepresentable {
         // Update alternating rows
         tableView.usesAlternatingRowBackgroundColors = alternatesRowBackgrounds
 
-        // Smart reload: if just data changed (same count, same IDs in order), reload visible rows only
-        if oldProjects.count == newProjects.count,
-           oldProjects.map(\.id) == newProjects.map(\.id) {
-            let visibleRange = tableView.rows(in: tableView.visibleRect)
-            if visibleRange.length > 0 {
-                let columnRange = NSRange(location: 0, length: tableView.numberOfColumns)
-                tableView.reloadData(
-                    forRowIndexes: IndexSet(integersIn: visibleRange.location..<(visibleRange.location + visibleRange.length)),
-                    columnIndexes: IndexSet(integersIn: columnRange.location..<(columnRange.location + columnRange.length))
-                )
-            }
-        } else {
-            tableView.reloadData()
+        // Smart reload: skip entirely when nothing displayed has changed (e.g. selection-only
+        // updates), reload visible rows when only data changed, full reload otherwise.
+        let displayUnchanged = oldProjects.elementsEqual(newProjects) { old, new in
+            old.id == new.id
+                && old.name == new.name
+                && old.lastIndexedAt == new.lastIndexedAt
+                && old.isFavorite == new.isFavorite
+                && old.completionStatus == new.completionStatus
+                && old.colorLabel == new.colorLabel
+                && old.userTagsJSON == new.userTagsJSON
         }
-
-        // Sync selection without triggering delegate callback
+        // Suppress selection callbacks for the whole reload + selection sync:
+        // reloadData() can shrink the row count, and NSTableView then adjusts the
+        // selection and fires the delegate synchronously — writing SwiftUI state
+        // in the middle of this view update. The explicit sync below re-applies
+        // the app's selection afterwards.
         coordinator.isSyncingSelection = true
+
+        if !displayUnchanged {
+            if oldProjects.elementsEqual(newProjects, by: { $0.id == $1.id }) {
+                let visibleRange = tableView.rows(in: tableView.visibleRect)
+                if visibleRange.length > 0 {
+                    let columnRange = NSRange(location: 0, length: tableView.numberOfColumns)
+                    tableView.reloadData(
+                        forRowIndexes: IndexSet(integersIn: visibleRange.location..<(visibleRange.location + visibleRange.length)),
+                        columnIndexes: IndexSet(integersIn: columnRange.location..<(columnRange.location + columnRange.length))
+                    )
+                }
+            } else {
+                tableView.reloadData()
+            }
+        }
         let targetIndexes = NSMutableIndexSet()
         for (index, project) in newProjects.enumerated() {
             if selection.contains(project.id) {
@@ -216,6 +240,15 @@ struct ProjectNSTableView: NSViewRepresentable {
             tableView.selectRowIndexes(IndexSet(targetIndexes), byExtendingSelection: false)
         }
         coordinator.isSyncingSelection = false
+
+        // Sync sort descriptors from app state (guarded so it doesn't echo back through
+        // sortDescriptorsDidChange and cause a feedback loop)
+        let current = tableView.sortDescriptors.first
+        if current?.key != sortColumn.rawValue || current?.ascending != sortAscending {
+            coordinator.isSyncingSort = true
+            tableView.sortDescriptors = [NSSortDescriptor(key: sortColumn.rawValue, ascending: sortAscending)]
+            coordinator.isSyncingSort = false
+        }
 
         // Sync sort indicators
         for nsColumn in tableView.tableColumns {
@@ -242,6 +275,7 @@ struct ProjectNSTableView: NSViewRepresentable {
         var tableView: NSTableView?
         var currentProjects: [ProjectRecord] = []
         var isSyncingSelection = false
+        var isSyncingSort = false
 
         // Reusable formatters (allocated once)
         private let dateFormatter: DateFormatter = {
@@ -451,7 +485,6 @@ struct ProjectNSTableView: NSViewRepresentable {
             let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "Favorite")
             button.image = image
             button.contentTintColor = project.isFavorite ? .systemYellow : .secondaryLabelColor
-            button.tag = currentProjects.firstIndex(where: { $0.id == project.id }) ?? -1
         }
 
         private func configureName(cell: NSTableCellView, project: ProjectRecord) {
@@ -598,7 +631,16 @@ struct ProjectNSTableView: NSViewRepresentable {
         }
 
         func tableView(_ tableView: NSTableView, sortDescriptorsDidChange oldDescriptors: [NSSortDescriptor]) {
-            // Handled by SwiftUI binding via sort column sync
+            guard !isSyncingSort,
+                  let descriptor = tableView.sortDescriptors.first,
+                  let key = descriptor.key,
+                  let sortColumn = SortColumn(rawValue: key) else { return }
+            parent.onSortChanged(sortColumn, descriptor.ascending)
+        }
+
+        func tableView(_ tableView: NSTableView, typeSelectStringFor tableColumn: NSTableColumn?, row: Int) -> String? {
+            guard row >= 0, row < currentProjects.count else { return nil }
+            return currentProjects[row].name
         }
 
         // MARK: - Actions
@@ -610,7 +652,8 @@ struct ProjectNSTableView: NSViewRepresentable {
         }
 
         @objc func favoriteClicked(_ sender: NSButton) {
-            let row = sender.tag
+            guard let tableView else { return }
+            let row = tableView.row(for: sender)
             guard row >= 0, row < currentProjects.count else { return }
             parent.onFavoriteToggle(currentProjects[row])
         }
@@ -626,7 +669,9 @@ struct ProjectNSTableView: NSViewRepresentable {
 
             let project = currentProjects[clickedRow]
             let selectedRows = tableView.selectedRowIndexes
-            let isMulti = selectedRows.count > 1
+            // AppKit convention: batch actions only apply when the clicked row is
+            // part of the selection; otherwise act on the row under the cursor.
+            let isMulti = selectedRows.count > 1 && selectedRows.contains(clickedRow)
 
             if isMulti {
                 menu.addItem(withTitle: "Open \(selectedRows.count) Projects in Ableton",

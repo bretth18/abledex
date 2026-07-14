@@ -48,6 +48,16 @@ struct ProjectNSTableWrapperView: View {
                 onSelectionChanged: { ids in
                     appState.selectedProjectIDs = ids
                 },
+                onSortChanged: { column, ascending in
+                    // Only write on actual change: each didSet re-filters, and the
+                    // new values flow back into the table via updateNSView.
+                    if appState.sortColumn != column {
+                        appState.sortColumn = column
+                    }
+                    if appState.sortAscending != ascending {
+                        appState.sortAscending = ascending
+                    }
+                },
                 onFavoriteToggle: { project in
                     Task { try? await appState.toggleFavorite(project) }
                 },

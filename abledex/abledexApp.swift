@@ -11,13 +11,19 @@ import SwiftUI
 struct AbledexApp: App {
     @State private var appState: AppState
     @State private var themeManager = ThemeManager()
+    @State private var didRunLaunchTask = false
+    private let databaseError: Error?
 
     init() {
         do {
             let database = try AppDatabase.live()
             _appState = State(initialValue: AppState(database: database))
+            databaseError = nil
         } catch {
-            fatalError("Failed to initialize database: \(error)")
+            // Don't crash at launch on a corrupted DB or full disk — fall back to a
+            // temporary in-memory database and surface the error to the user.
+            _appState = State(initialValue: AppState(database: try! AppDatabase.empty()))
+            databaseError = error
         }
     }
 
@@ -31,11 +37,23 @@ struct AbledexApp: App {
                 .tint(themeManager.current.usesCustomBackground ? themeManager.current.accent : nil)
                 .windowBackground(themeManager.current.windowBackground)
                 .task {
+                    // This .task re-runs on every window open — launch work must run once
+                    guard !didRunLaunchTask else { return }
+                    didRunLaunchTask = true
+
+                    if let databaseError {
+                        appState.reportError(
+                            "Database Could Not Be Opened",
+                            databaseError
+                        )
+                        return
+                    }
                     await appState.loadData()
                     appState.startVolumeMonitoring()
-                }
-                .onDisappear {
-                    appState.stopVolumeMonitoring()
+
+                    if UserDefaults.standard.object(forKey: "autoScanOnLaunch") as? Bool ?? true {
+                        await appState.startScan()
+                    }
                 }
         }
         .commands {
@@ -62,18 +80,68 @@ struct AbledexApp: App {
                 .keyboardShortcut("r", modifiers: [.command, .shift])
                 .disabled(appState.isScanning)
 
+                Button("Stop Scan") {
+                    appState.cancelScan()
+                }
+                .keyboardShortcut(".", modifiers: .command)
+                .disabled(!appState.isScanning)
+
                 Divider()
 
                 Button("Add Folder...") {
                     selectFolder()
                 }
                 .keyboardShortcut("o", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button("Export Library as CSV...") {
+                    do {
+                        try ExportService.exportCSV(projects: appState.filteredProjects)
+                    } catch {
+                        appState.reportError("Export Failed", error)
+                    }
+                }
+                .keyboardShortcut("e", modifiers: [.command, .shift])
+                .disabled(appState.filteredProjects.isEmpty)
+            }
+
+            CommandMenu("Project") {
+                Button("Open in Ableton Live") {
+                    if let project = appState.selectedProject {
+                        appState.openProject(project)
+                    }
+                }
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(appState.selectedProject == nil)
+
+                Button("Reveal in Finder") {
+                    if let project = appState.selectedProject {
+                        appState.revealProject(project)
+                    }
+                }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(appState.selectedProject == nil)
+
+                Divider()
+
+                Button(appState.selectedProject?.isFavorite == true ? "Remove Favorite" : "Add Favorite") {
+                    if let project = appState.selectedProject {
+                        Task {
+                            do {
+                                try await appState.toggleFavorite(project)
+                            } catch {
+                                appState.reportError("Failed to Update Favorite", error)
+                            }
+                        }
+                    }
+                }
+                .keyboardShortcut("l", modifiers: .command)
+                .disabled(appState.selectedProject == nil)
             }
 
             CommandGroup(replacing: .help) {
-                Button("Abledex Help") {
-                    // Could open documentation
-                }
+                Link("Abledex Help", destination: URL(string: "https://github.com/bretth18/abledex")!)
             }
         }
 
@@ -99,7 +167,11 @@ struct AbledexApp: App {
 
         if panel.runModal() == .OK, let url = panel.url {
             Task {
-                try? await appState.addLocation(path: url.path)
+                do {
+                    try await appState.addLocation(path: url.path)
+                } catch {
+                    appState.reportError("Failed to Add Folder", error)
+                }
             }
         }
     }

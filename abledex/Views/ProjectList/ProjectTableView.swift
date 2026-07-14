@@ -10,6 +10,7 @@ import SwiftUI
 struct ProjectTableView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.theme) private var theme
+    @AppStorage("showMissingSamplesWarning") private var showMissingSamplesWarning = true
     @State private var showDeleteConfirmation = false
     @State private var showBatchTagSheet = false
     @State private var batchTagInput = ""
@@ -27,13 +28,18 @@ struct ProjectTableView: View {
                 TableColumn("") { project in
                     Button {
                         Task {
-                            try? await appState.toggleFavorite(project)
+                            do {
+                                try await appState.toggleFavorite(project)
+                            } catch {
+                                appState.reportError("Failed to Update Favorite", error)
+                            }
                         }
                     } label: {
                         Image(systemName: project.isFavorite ? "star.fill" : "star")
                             .foregroundStyle(project.isFavorite ? .yellow : .secondary)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(project.isFavorite ? "Remove Favorite" : "Add Favorite")
                 }
                 .width(24)
 
@@ -45,13 +51,19 @@ struct ProjectTableView: View {
                             Text(project.name)
                                 .lineLimit(1)
                                 .foregroundStyle(project.colorLabel.color)
-                            if project.hasMissingSamples {
+                            if project.hasMissingSamples && showMissingSamplesWarning {
                                 Label("Missing samples", systemImage: "exclamationmark.triangle.fill")
                                     .font(.caption2)
                                     .foregroundStyle(.orange)
                             }
+                            if !appState.isVolumeOnline(project) {
+                                Label("Drive offline", systemImage: "externaldrive.badge.xmark")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
+                    .opacity(appState.isVolumeOnline(project) ? 1 : 0.5)
                 }
                 .width(min: 150, ideal: 200)
 
@@ -90,7 +102,9 @@ struct ProjectTableView: View {
 
                 TableColumn("Modified") { project in
                     let date = project.modifiedDate ?? project.filesystemModifiedDate
-                    Text(date, style: .relative)
+                    // Formatted once — Text(_, style: .relative) schedules per-second
+                    // re-renders for every visible row
+                    Text(date.formatted(.relative(presentation: .named)))
                         .foregroundStyle(.secondary)
                 }
                 .width(min: 80, ideal: 100)
@@ -135,9 +149,14 @@ struct ProjectTableView: View {
                 .width(60)
 
                 TableColumn("Volume") { project in
-                    Label(project.sourceVolume, systemImage: project.sourceVolume == "Macintosh HD" ? "internaldrive" : "externaldrive")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Label(
+                        project.sourceVolume,
+                        systemImage: appState.isVolumeOnline(project)
+                            ? (project.sourceVolume == "Macintosh HD" ? "internaldrive" : "externaldrive")
+                            : "externaldrive.badge.xmark"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
                 .width(min: 80, ideal: 120)
                 
@@ -161,6 +180,34 @@ struct ProjectTableView: View {
             }
             .tableStyle(.inset(alternatesRowBackgrounds: !theme.usesCustomBackground))
             .scrollContentBackground(theme.usesCustomBackground ? .hidden : .automatic)
+            .overlay {
+                if appState.filteredProjects.isEmpty {
+                    if appState.projects.isEmpty {
+                        ContentUnavailableView {
+                            Label("No Projects Yet", systemImage: "music.note.list")
+                        } description: {
+                            Text("Scan your locations to index your Ableton projects and sets.")
+                        } actions: {
+                            Button("Scan All Locations") {
+                                Task { await appState.startScan() }
+                            }
+                            .disabled(appState.isScanning)
+                        }
+                    } else if !appState.searchQuery.isEmpty {
+                        ContentUnavailableView.search(text: appState.searchQuery)
+                    } else {
+                        ContentUnavailableView {
+                            Label("No Matching Projects", systemImage: "line.3.horizontal.decrease.circle")
+                        } description: {
+                            Text("No projects match the current filters.")
+                        } actions: {
+                            Button("Clear Filters") {
+                                appState.clearAllFilters()
+                            }
+                        }
+                    }
+                }
+            }
             .onDeleteCommand {
                 if !appState.selectedProjectIDs.isEmpty {
                     showDeleteConfirmation = true
@@ -183,13 +230,17 @@ struct ProjectTableView: View {
             }
         }
         .confirmationDialog(
-            "Remove \(appState.selectedProjectIDs.count) project\(appState.selectedProjectIDs.count == 1 ? "" : "s") from library?",
+            "Remove ^[\(appState.selectedProjectIDs.count) project](inflect: true) from library?",
             isPresented: $showDeleteConfirmation,
             titleVisibility: .visible
         ) {
             Button("Remove", role: .destructive) {
                 Task {
-                    try? await appState.deleteSelectedProjects()
+                    do {
+                        try await appState.deleteSelectedProjects()
+                    } catch {
+                        appState.reportError("Failed to Remove Projects", error)
+                    }
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -338,6 +389,8 @@ struct ProjectTableView: View {
                 }
             }
 
+            musicProjectMenu(for: appState.selectedProjectIDs)
+
             Button("Re-scan \(appState.selectedProjectIDs.count) Projects") {
                 Task {
                     await appState.rescanProjects(appState.selectedProjects)
@@ -386,6 +439,8 @@ struct ProjectTableView: View {
                 }
             }
 
+            musicProjectMenu(for: [project.id], currentCollectionID: project.collectionID)
+
             Button("Re-scan Project") {
                 Task {
                     await appState.rescanProject(project)
@@ -405,6 +460,44 @@ struct ProjectTableView: View {
         }
     }
 
+    // MARK: - Music Project Menu
+
+    @ViewBuilder
+    private func musicProjectMenu(for projectIDs: Set<UUID>, currentCollectionID: UUID? = nil) -> some View {
+        Menu("Music Project") {
+            ForEach(appState.collections) { collection in
+                Button {
+                    assign(projectIDs, to: collection.id)
+                } label: {
+                    if currentCollectionID == collection.id {
+                        Label(collection.name, systemImage: "checkmark")
+                    } else {
+                        Label(collection.name, systemImage: collection.kind.icon)
+                    }
+                }
+            }
+
+            if !appState.collections.isEmpty {
+                Divider()
+            }
+
+            if currentCollectionID != nil {
+                Button("Remove from Music Project") {
+                    assign(projectIDs, to: nil)
+                }
+            }
+        }
+    }
+
+    private func assign(_ projectIDs: Set<UUID>, to collectionID: UUID?) {
+        Task {
+            do {
+                try await appState.assignProjects(projectIDs, toCollection: collectionID)
+            } catch {
+                appState.reportError("Failed to Update Music Project", error)
+            }
+        }
+    }
 }
 
 
