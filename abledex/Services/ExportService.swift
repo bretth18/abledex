@@ -33,24 +33,31 @@ enum ExportService {
 
         var lines = [header.map(escape).joined(separator: ",")]
         for project in projects {
-            let fields = [
-                project.name,
-                project.folderPath,
-                project.sourceVolume,
-                project.bpm.map { String(format: "%.2f", $0) } ?? "",
-                project.musicalKeys.joined(separator: "; "),
-                String(project.totalTrackCount),
-                project.duration.map { String(format: "%.1f", $0) } ?? "",
-                project.abletonVersion ?? "",
-                project.completionStatus.label,
-                project.isFavorite ? "Yes" : "No",
-                project.userTags.joined(separator: "; "),
-                project.plugins.joined(separator: "; "),
-                project.createdDate.map(dateFormatter.string) ?? "",
-                dateFormatter.string(from: project.modifiedDate ?? project.filesystemModifiedDate),
-                project.lastOpenedAt.map(dateFormatter.string) ?? "",
-                project.userNotes ?? ""
-            ]
+            // Built with appends — a single mixed-expression array literal here
+            // exceeds the CI toolchain's type-check time limit.
+            let bpm: String = project.bpm.map { String(format: "%.2f", $0) } ?? ""
+            let duration: String = project.duration.map { String(format: "%.1f", $0) } ?? ""
+            let created: String = project.createdDate.map(dateFormatter.string) ?? ""
+            let modified: String = dateFormatter.string(from: project.modifiedDate ?? project.filesystemModifiedDate)
+            let lastOpened: String = project.lastOpenedAt.map(dateFormatter.string) ?? ""
+
+            var fields: [String] = []
+            fields.append(project.name)
+            fields.append(project.folderPath)
+            fields.append(project.sourceVolume)
+            fields.append(bpm)
+            fields.append(project.musicalKeys.joined(separator: "; "))
+            fields.append(String(project.totalTrackCount))
+            fields.append(duration)
+            fields.append(project.abletonVersion ?? "")
+            fields.append(project.completionStatus.label)
+            fields.append(project.isFavorite ? "Yes" : "No")
+            fields.append(project.userTags.joined(separator: "; "))
+            fields.append(project.plugins.joined(separator: "; "))
+            fields.append(created)
+            fields.append(modified)
+            fields.append(lastOpened)
+            fields.append(project.userNotes ?? "")
             lines.append(fields.map(escape).joined(separator: ","))
         }
 
