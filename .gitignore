@@ -9,3 +9,4 @@ CMakePresets.json
 
 # Test fixtures (real Ableton projects not committed)
 abledexTests/Fixtures/test Project/
+*.profraw
