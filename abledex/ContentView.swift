@@ -20,13 +20,30 @@ struct ContentView: View {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 300)
         } content: {
-            ProjectTableView()
-                .navigationSplitViewColumnWidth(min: 400, ideal: 600)
+            Group {
+                if appState.useNSTableView {
+                    ProjectNSTableWrapperView()
+                } else {
+                    ProjectTableView()
+                }
+            }
+            .navigationSplitViewColumnWidth(min: 400, ideal: 600)
                 .navigationTitle(navigationTitle)
                 .navigationSubtitle("\(appState.filteredProjects.count) projects")
                 .searchable(text: $state.searchQuery, prompt: "Search projects, plugins, tags...")
                 .toolbar {
                     ToolbarItemGroup {
+                        // A/B performance toggle
+                        Button {
+                            appState.useNSTableView.toggle()
+                        } label: {
+                            Label(
+                                appState.useNSTableView ? "NSTableView" : "SwiftUI Table",
+                                systemImage: appState.useNSTableView ? "tablecells" : "tablecells.badge.ellipsis"
+                            )
+                        }
+                        .help(appState.useNSTableView ? "Using NSTableView (AppKit) — click to switch to SwiftUI" : "Using SwiftUI Table — click to switch to NSTableView (AppKit)")
+
                         Button {
                             showStatistics = true
                         } label: {

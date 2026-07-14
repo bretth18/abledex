@@ -147,6 +147,9 @@ final class AppState {
         }
     }
 
+    // Table implementation toggle for A/B performance comparison
+    var useNSTableView: Bool = false
+
     var isScanning: Bool = false
     var scanProgress: ScanProgress?
 
@@ -177,6 +180,7 @@ final class AppState {
     }
 
     private func recomputeFilteredProjects() {
+        guard !isBatchUpdating else { return }
         var result = projects
 
         // Apply search filter (includes name, plugins, and tags)
@@ -513,11 +517,8 @@ final class AppState {
         let result: Result<Int, Error> = await Task.detached(priority: .userInitiated) {
             do {
                 let count = try await scanner.scanAllLocations(forceReparse: forceReparse) { progress in
-                    Task { @MainActor in
-                        // Use weak reference pattern inline
-                        await MainActor.run { [weak self] in
-                            self?.scanProgress = progress
-                        }
+                    Task { @MainActor [weak self] in
+                        self?.scanProgress = progress
                     }
                 }
                 return .success(count)
@@ -546,10 +547,8 @@ final class AppState {
         let result: Result<Int, Error> = await Task.detached(priority: .userInitiated) {
             do {
                 let count = try await scanner.scanLocation(location, forceReparse: true) { progress in
-                    Task { @MainActor in
-                        await MainActor.run { [weak self] in
-                            self?.scanProgress = progress
-                        }
+                    Task { @MainActor [weak self] in
+                        self?.scanProgress = progress
                     }
                 }
                 return .success(count)
@@ -877,6 +876,8 @@ final class AppState {
     }
 
     func clearAllFilters() {
+        // Suppress recomputation during batch reset, trigger once at end
+        isBatchUpdating = true
         selectedFilter = .all
         selectedVolumeFilter = nil
         selectedStatusFilter = nil
@@ -888,6 +889,8 @@ final class AppState {
         showFavoritesOnly = false
         showDuplicatesOnly = false
         searchQuery = ""
+        isBatchUpdating = false
+        recomputeFilteredProjects()
     }
 }
 
