@@ -8,6 +8,7 @@
 import Foundation
 
 enum SidebarSection: String, CaseIterable, Codable, Identifiable {
+    case musicProjects = "Music Projects"
     case status = "Status"
     case colors = "Colors"
     case plugins = "Plugins"
@@ -21,6 +22,7 @@ enum SidebarSection: String, CaseIterable, Codable, Identifiable {
 
     var icon: String {
         switch self {
+        case .musicProjects: return "square.stack"
         case .status: return "checkmark.circle"
         case .colors: return "circle.fill"
         case .plugins: return "puzzlepiece.extension"
@@ -33,7 +35,7 @@ enum SidebarSection: String, CaseIterable, Codable, Identifiable {
     }
 
     static let defaultOrder: [SidebarSection] = [
-        .status, .colors, .plugins, .keys, .folders, .tags, .volumes, .locations
+        .musicProjects, .status, .colors, .plugins, .keys, .folders, .tags, .volumes, .locations
     ]
 }
 

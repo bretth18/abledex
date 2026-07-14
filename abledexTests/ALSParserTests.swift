@@ -287,6 +287,287 @@ struct ALSParserTests {
         #expect(result.abletonVersion == version)
     }
 
+    @Test("Parses MinorVersion attribute from header")
+    func parseMinorVersion() throws {
+        var config = ALSFixtureGenerator.ProjectConfig.minimal
+        config.minorVersion = "12.0_12049"
+
+        let fileURL = tempDirectory.appendingPathComponent("minor_version.als")
+        try ALSFixtureGenerator.writeALSFile(to: fileURL, config: config)
+
+        let result = try parser.parse(alsFilePath: fileURL)
+
+        #expect(result.abletonMinorVersion == "12.0_12049")
+    }
+
+    @Test("MinorVersion defaults populate on minimal fixture")
+    func parseDefaultMinorVersion() throws {
+        let fileURL = tempDirectory.appendingPathComponent("default_minor.als")
+        try ALSFixtureGenerator.writeALSFile(to: fileURL, config: .minimal)
+
+        let result = try parser.parse(alsFilePath: fileURL)
+
+        #expect(result.abletonMinorVersion == "12.1.0")
+    }
+
+    // MARK: - FileRef Path Extraction Tests
+
+    @Test("Extracts absolute and relative paths from FileRef blocks")
+    func extractFileRefPaths() throws {
+        var config = ALSFixtureGenerator.ProjectConfig.minimal
+        config.fileRefs = [
+            .init(path: "/Users/test/Music/Samples/kick.wav",
+                  relativePath: "Samples/Imported/kick.wav",
+                  name: "kick.wav"),
+            .init(path: nil,
+                  relativePath: "Samples/Processed/snare.wav",
+                  name: "snare.wav"),
+            .init(path: "/Volumes/External/loops/bass.aif",
+                  relativePath: nil,
+                  name: "bass.aif")
+        ]
+
+        let fileURL = tempDirectory.appendingPathComponent("filerefs.als")
+        try ALSFixtureGenerator.writeALSFile(to: fileURL, config: config)
+
+        let result = try parser.parse(alsFilePath: fileURL)
+
+        #expect(result.sampleFileReferences.count == 3)
+        #expect(result.sampleFileReferences.contains(
+            SampleFileReference(absolutePath: "/Users/test/Music/Samples/kick.wav",
+                                relativePath: "Samples/Imported/kick.wav")
+        ))
+        #expect(result.sampleFileReferences.contains(
+            SampleFileReference(absolutePath: nil,
+                                relativePath: "Samples/Processed/snare.wav")
+        ))
+        #expect(result.sampleFileReferences.contains(
+            SampleFileReference(absolutePath: "/Volumes/External/loops/bass.aif",
+                                relativePath: nil)
+        ))
+        // Name-based sample extraction remains unchanged
+        #expect(result.samplePaths.contains("kick.wav"))
+        #expect(result.samplePaths.contains("snare.wav"))
+    }
+
+    @Test("Deduplicates identical FileRef blocks")
+    func deduplicatesFileRefs() throws {
+        var config = ALSFixtureGenerator.ProjectConfig.minimal
+        config.fileRefs = [
+            .init(path: "/Users/test/kick.wav", relativePath: "Samples/kick.wav"),
+            .init(path: "/Users/test/kick.wav", relativePath: "Samples/kick.wav")
+        ]
+
+        let fileURL = tempDirectory.appendingPathComponent("dup_filerefs.als")
+        try ALSFixtureGenerator.writeALSFile(to: fileURL, config: config)
+
+        let result = try parser.parse(alsFilePath: fileURL)
+
+        #expect(result.sampleFileReferences.count == 1)
+    }
+
+    @Test("Unescapes XML entities in FileRef paths")
+    func unescapesFileRefPaths() throws {
+        var config = ALSFixtureGenerator.ProjectConfig.minimal
+        config.fileRefs = [
+            .init(path: "/Users/test/Drums &amp; Bass/kick.wav", relativePath: nil)
+        ]
+
+        let fileURL = tempDirectory.appendingPathComponent("escaped_fileref.als")
+        try ALSFixtureGenerator.writeALSFile(to: fileURL, config: config)
+
+        let result = try parser.parse(alsFilePath: fileURL)
+
+        #expect(result.sampleFileReferences.first?.absolutePath == "/Users/test/Drums & Bass/kick.wav")
+    }
+
+    @Test("Returns no FileRef references when project has none")
+    func noFileRefs() throws {
+        let fileURL = tempDirectory.appendingPathComponent("no_filerefs.als")
+        try ALSFixtureGenerator.writeALSFile(to: fileURL, config: .minimal)
+
+        let result = try parser.parse(alsFilePath: fileURL)
+
+        #expect(result.sampleFileReferences.isEmpty)
+    }
+
+    @Test("FileRefs outside SampleRef (device/preset paths) are ignored")
+    func ignoresPresetFileRefs() throws {
+        var config = ALSFixtureGenerator.ProjectConfig()
+        config.fileRefs = [
+            .init(path: "/Users/test/Samples/real-sample.wav", relativePath: "Samples/Imported/real-sample.wav")
+        ]
+        config.presetFileRefs = [
+            .init(path: "/Users/test/Presets/stale-preset.fxp", relativePath: nil),
+            .init(path: "/Users/old-machine/Documents/serum-patch.vstpreset", relativePath: nil)
+        ]
+        let fileURL = tempDirectory.appendingPathComponent("preset_refs.als")
+        try ALSFixtureGenerator.writeALSFile(to: fileURL, config: config)
+
+        let result = try parser.parse(alsFilePath: fileURL)
+
+        #expect(result.sampleFileReferences.count == 1)
+        #expect(result.sampleFileReferences.first?.absolutePath == "/Users/test/Samples/real-sample.wav")
+    }
+
+    // MARK: - Missing Sample Detection Tests
+
+    @Test("No missing samples when references are empty")
+    func missingSamplesEmptyReferences() {
+        let missing = ProjectScanner.detectMissingSamples(
+            references: [],
+            projectFolder: tempDirectory
+        )
+        #expect(missing == false)
+    }
+
+    @Test("Absolute path that exists is not missing")
+    func missingSamplesAbsoluteExists() throws {
+        let sampleURL = tempDirectory.appendingPathComponent("exists.wav")
+        try Data([0x00]).write(to: sampleURL)
+
+        let missing = ProjectScanner.detectMissingSamples(
+            references: [SampleFileReference(absolutePath: sampleURL.path, relativePath: nil)],
+            projectFolder: tempDirectory
+        )
+        #expect(missing == false)
+    }
+
+    @Test("Falls back to relative path resolved against project folder")
+    func missingSamplesRelativeFallback() throws {
+        let samplesDir = tempDirectory.appendingPathComponent("Samples/Imported")
+        try FileManager.default.createDirectory(at: samplesDir, withIntermediateDirectories: true)
+        try Data([0x00]).write(to: samplesDir.appendingPathComponent("kick.wav"))
+
+        // Absolute path is stale (points at a machine that no longer exists),
+        // but the relative path resolves inside the project folder.
+        let missing = ProjectScanner.detectMissingSamples(
+            references: [SampleFileReference(
+                absolutePath: "/Users/oldmachine/gone/kick.wav",
+                relativePath: "Samples/Imported/kick.wav"
+            )],
+            projectFolder: tempDirectory
+        )
+        #expect(missing == false)
+    }
+
+    @Test("Missing when neither absolute nor relative path resolves")
+    func missingSamplesNeitherResolves() {
+        let missing = ProjectScanner.detectMissingSamples(
+            references: [SampleFileReference(
+                absolutePath: tempDirectory.appendingPathComponent("nope.wav").path,
+                relativePath: "Samples/nope.wav"
+            )],
+            projectFolder: tempDirectory
+        )
+        #expect(missing == true)
+    }
+
+    @Test("Ableton factory/library content is never flagged as missing")
+    func missingSamplesFactoryContent() {
+        let missing = ProjectScanner.detectMissingSamples(
+            references: [
+                SampleFileReference(
+                    absolutePath: "/Users/nobody/Music/Ableton/Factory Packs/Drum Essentials/kick.wav",
+                    relativePath: nil
+                ),
+                SampleFileReference(
+                    absolutePath: "/Applications/Ableton Live 12 Suite.app/Contents/App-Resources/Core Library/Samples/hat.aif",
+                    relativePath: nil
+                ),
+                SampleFileReference(
+                    absolutePath: nil,
+                    relativePath: "../../User Library/Samples/vocal-chop.wav"
+                )
+            ],
+            projectFolder: tempDirectory
+        )
+        #expect(missing == false)
+    }
+
+    @Test("Sample found by filename in the project's Samples tree is not missing")
+    func missingSamplesAutoLocateByFilename() throws {
+        // The recorded paths are stale, but the file exists under Samples/ —
+        // Live auto-locates it by name, so it must not be flagged.
+        let importedDir = tempDirectory.appendingPathComponent("Samples/Imported")
+        try FileManager.default.createDirectory(at: importedDir, withIntermediateDirectories: true)
+        try Data("wav".utf8).write(to: importedDir.appendingPathComponent("relocated.wav"))
+
+        let missing = ProjectScanner.detectMissingSamples(
+            references: [SampleFileReference(
+                absolutePath: "/Users/old-machine/old-location/RELOCATED.wav",
+                relativePath: "../somewhere-else/relocated.wav"
+            )],
+            projectFolder: tempDirectory
+        )
+        #expect(missing == false)
+    }
+
+    @Test("Sample on unmounted volume is not flagged as missing")
+    func missingSamplesOfflineVolume() {
+        let missing = ProjectScanner.detectMissingSamples(
+            references: [SampleFileReference(
+                absolutePath: "/Volumes/abledex-test-not-mounted-\(UUID().uuidString)/loops/bass.wav",
+                relativePath: nil
+            )],
+            projectFolder: tempDirectory
+        )
+        #expect(missing == false)
+    }
+
+    @Test("One missing reference among resolvable ones flags the project")
+    func missingSamplesMixedReferences() throws {
+        let goodURL = tempDirectory.appendingPathComponent("good.wav")
+        try Data([0x00]).write(to: goodURL)
+
+        let missing = ProjectScanner.detectMissingSamples(
+            references: [
+                SampleFileReference(absolutePath: goodURL.path, relativePath: nil),
+                SampleFileReference(absolutePath: tempDirectory.appendingPathComponent("gone.wav").path,
+                                    relativePath: nil)
+            ],
+            projectFolder: tempDirectory
+        )
+        #expect(missing == true)
+    }
+
+    @Test("End-to-end: parse fixture then resolve sample references")
+    func endToEndMissingSampleDetection() throws {
+        // Build a fake project folder with one real sample and one missing one
+        let projectFolder = tempDirectory.appendingPathComponent("E2E Project")
+        let samplesDir = projectFolder.appendingPathComponent("Samples/Imported")
+        try FileManager.default.createDirectory(at: samplesDir, withIntermediateDirectories: true)
+        let realSample = samplesDir.appendingPathComponent("kick.wav")
+        try Data([0x00]).write(to: realSample)
+
+        var config = ALSFixtureGenerator.ProjectConfig.minimal
+        config.fileRefs = [
+            .init(path: realSample.path, relativePath: "Samples/Imported/kick.wav"),
+            .init(path: projectFolder.appendingPathComponent("Samples/Imported/vanished.wav").path,
+                  relativePath: "Samples/Imported/vanished.wav")
+        ]
+
+        let alsURL = projectFolder.appendingPathComponent("e2e.als")
+        try ALSFixtureGenerator.writeALSFile(to: alsURL, config: config)
+
+        let parsed = try parser.parse(alsFilePath: alsURL)
+        #expect(parsed.sampleFileReferences.count == 2)
+
+        let missing = ProjectScanner.detectMissingSamples(
+            references: parsed.sampleFileReferences,
+            projectFolder: projectFolder
+        )
+        #expect(missing == true)
+
+        // Restore the vanished sample -> no longer missing
+        try Data([0x00]).write(to: samplesDir.appendingPathComponent("vanished.wav"))
+        let missingAfterRestore = ProjectScanner.detectMissingSamples(
+            references: parsed.sampleFileReferences,
+            projectFolder: projectFolder
+        )
+        #expect(missingAfterRestore == false)
+    }
+
     // MARK: - Musical Key Parsing Tests
 
     @Test("Parses musical keys from complex project")

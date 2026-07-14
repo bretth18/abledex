@@ -151,6 +151,9 @@ struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, Persista
     var isFavorite: Bool
     var lastOpenedAt: Date?
 
+    // Music project (EP/album) this project belongs to, if any
+    var collectionID: UUID? = nil
+
     enum Columns: String, ColumnExpression {
         case id
         case name
@@ -182,19 +185,23 @@ struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, Persista
         case colorLabel
         case isFavorite
         case lastOpenedAt
+        case collectionID
     }
 }
 
 // MARK: - JSON Decoding Cache
 
-/// Thread-safe LRU cache for decoded JSON arrays to avoid repeated decoding
+/// Thread-safe LRU-ish cache for decoded JSON arrays to avoid repeated decoding.
+/// Each entry carries a monotonically increasing generation stamp updated on access,
+/// making cache hits O(1). Eviction happens only on insert when over capacity,
+/// dropping the least-recently-used quarter of entries in one pass to amortize cost.
 private final class JSONDecodeCache: @unchecked Sendable {
     static let shared = JSONDecodeCache()
 
     private static let maxEntries = 2000
 
-    private var cache: [String: [String]] = [:]
-    private var accessOrder: [String] = []  // LRU tracking: most recent at end
+    private var cache: [String: (value: [String], generation: UInt64)] = [:]
+    private var generation: UInt64 = 0
     private let lock = NSLock()
     private let decoder = JSONDecoder()
 
@@ -205,13 +212,11 @@ private final class JSONDecodeCache: @unchecked Sendable {
 
         // Check cache first
         if let cached = cache[json] {
-            // Move to end (most recently used)
-            if let idx = accessOrder.lastIndex(of: json) {
-                accessOrder.remove(at: idx)
-            }
-            accessOrder.append(json)
+            // Stamp with the latest generation (most recently used)
+            generation += 1
+            cache[json] = (cached.value, generation)
             lock.unlock()
-            return cached
+            return cached.value
         }
 
         lock.unlock()
@@ -223,13 +228,18 @@ private final class JSONDecodeCache: @unchecked Sendable {
         }
 
         lock.lock()
-        cache[json] = decoded
-        accessOrder.append(json)
+        generation += 1
+        cache[json] = (decoded, generation)
 
-        // Evict oldest entries if over capacity
-        while cache.count > Self.maxEntries {
-            let oldest = accessOrder.removeFirst()
-            cache.removeValue(forKey: oldest)
+        // Evict the least-recently-used ~25% of entries if over capacity
+        if cache.count > Self.maxEntries {
+            let evictCount = Self.maxEntries / 4
+            let cutoff = cache.values
+                .map(\.generation)
+                .sorted()[evictCount]
+            for (key, entry) in cache where entry.generation < cutoff {
+                cache.removeValue(forKey: key)
+            }
         }
 
         lock.unlock()
@@ -240,7 +250,6 @@ private final class JSONDecodeCache: @unchecked Sendable {
     func clear() {
         lock.lock()
         cache.removeAll()
-        accessOrder.removeAll()
         lock.unlock()
     }
 }

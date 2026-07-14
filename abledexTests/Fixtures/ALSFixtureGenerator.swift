@@ -5,8 +5,16 @@ import Compression
 /// ALS files are gzip-compressed XML documents.
 struct ALSFixtureGenerator {
 
+    /// A `<FileRef>` sample reference in the modern (Live 10/11/12) attribute form.
+    struct FileRefConfig {
+        var path: String? = nil          // Absolute path: <Path Value="..."/>
+        var relativePath: String? = nil  // Project-relative: <RelativePath Value="..."/>
+        var name: String? = nil          // Optional <Name Value="..."/> inside the FileRef
+    }
+
     struct ProjectConfig {
         var creatorVersion: String = "12.1"
+        var minorVersion: String = "12.1.0" // MinorVersion attribute on <Ableton>
         var bpm: Double = 120.0
         var timeSignatureNumerator: Int = 4
         var timeSignatureDenominator: Int = 4
@@ -16,6 +24,8 @@ struct ALSFixtureGenerator {
         var arrangementLength: Double = 960.0 // in beats
         var plugins: [String] = []
         var sampleNames: [String] = []
+        var fileRefs: [FileRefConfig] = []
+        var presetFileRefs: [FileRefConfig] = [] // FileRefs OUTSIDE <SampleRef> (device/preset paths)
         var scales: [(root: Int, name: Int)] = [] // Root: 0-11 (C-B), Name: 0=Major, 1=Minor, etc.
 
         static let minimal = ProjectConfig()
@@ -66,7 +76,7 @@ struct ALSFixtureGenerator {
     private static func generateXML(config: ProjectConfig) -> String {
         var xml = """
         <?xml version="1.0" encoding="UTF-8"?>
-        <Ableton MajorVersion="5" MinorVersion="12.1.0" SchemaChangeCount="3" Creator="Ableton Live \(config.creatorVersion)" Revision="">
+        <Ableton MajorVersion="5" MinorVersion="\(config.minorVersion)" SchemaChangeCount="3" Creator="Ableton Live \(config.creatorVersion)" Revision="">
         <LiveSet>
             <Tempo>
                 <LomId Value="0" />
@@ -153,6 +163,75 @@ struct ALSFixtureGenerator {
             xml += """
 
             </SampleRefs>
+            """
+        }
+
+        // Add modern-style FileRef sample references (Live 10/11/12 attribute form)
+        if !config.fileRefs.isEmpty {
+            xml += """
+
+            <SampleFileRefs>
+            """
+            for fileRef in config.fileRefs {
+                xml += """
+
+                <SampleRef>
+                    <FileRef>
+                """
+                if let name = fileRef.name {
+                    xml += """
+
+                        <Name Value="\(name)" />
+                    """
+                }
+                if let relativePath = fileRef.relativePath {
+                    xml += """
+
+                        <RelativePath Value="\(relativePath)" />
+                    """
+                }
+                if let path = fileRef.path {
+                    xml += """
+
+                        <Path Value="\(path)" />
+                    """
+                }
+                xml += """
+
+                    </FileRef>
+                </SampleRef>
+                """
+            }
+            xml += """
+
+            </SampleFileRefs>
+            """
+        }
+
+        // FileRefs outside any <SampleRef> — how Live stores device/VST preset
+        // paths. The parser must NOT treat these as sample references.
+        for fileRef in config.presetFileRefs {
+            xml += """
+
+            <PluginDesc>
+                <FileRef>
+            """
+            if let relativePath = fileRef.relativePath {
+                xml += """
+
+                    <RelativePath Value="\(relativePath)" />
+                """
+            }
+            if let path = fileRef.path {
+                xml += """
+
+                    <Path Value="\(path)" />
+                """
+            }
+            xml += """
+
+                </FileRef>
+            </PluginDesc>
             """
         }
 

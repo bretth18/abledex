@@ -12,8 +12,13 @@ struct SidebarView: View {
     @Environment(\.theme) private var theme
     @AppStorage("useCamelotNotation") private var useCamelotNotation = false
     @State private var isLibraryExpanded = true
-    @State private var expandedSections: Set<SidebarSection> = [.status, .tags, .colors, .locations]
+    @State private var expandedSections: Set<SidebarSection> = [.musicProjects, .status, .tags, .colors, .locations]
     @State private var sectionOrder: [SidebarSection] = SidebarOrderStorage.order
+    @State private var showNewCollectionSheet = false
+    @State private var newCollectionName = ""
+    @State private var newCollectionKind: CollectionKind = .ep
+    @State private var collectionToRename: CollectionRecord?
+    @State private var renameText = ""
 
     var body: some View {
         @Bindable var state = appState
@@ -45,8 +50,196 @@ struct SidebarView: View {
             bottomBar
         }
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
-            sectionOrder = SidebarOrderStorage.order
+            // Fires on EVERY defaults write (sort persistence, column autosave...) —
+            // only touch state when the order actually changed to avoid full rebuilds.
+            let newOrder = SidebarOrderStorage.order
+            if sectionOrder != newOrder {
+                sectionOrder = newOrder
+            }
         }
+        .sheet(isPresented: $showNewCollectionSheet) {
+            newCollectionSheet
+        }
+        .alert(
+            "Rename Music Project",
+            isPresented: Binding(
+                get: { collectionToRename != nil },
+                set: { if !$0 { collectionToRename = nil } }
+            ),
+            presenting: collectionToRename
+        ) { collection in
+            TextField("Name", text: $renameText)
+            Button("Rename") {
+                var updated = collection
+                updated.name = renameText.trimmingCharacters(in: .whitespaces)
+                guard !updated.name.isEmpty else { return }
+                Task {
+                    do {
+                        try await appState.updateCollection(updated)
+                    } catch {
+                        appState.reportError("Failed to Rename Music Project", error)
+                    }
+                }
+            }
+            .disabled(renameText.trimmingCharacters(in: .whitespaces).isEmpty)
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    // MARK: - Music Projects Section
+
+    @ViewBuilder
+    private var musicProjectsSection: some View {
+        Section(isExpanded: expansionBinding(for: .musicProjects)) {
+            ForEach(appState.collections) { collection in
+                musicProjectRow(collection)
+            }
+
+            Button {
+                newCollectionName = ""
+                newCollectionKind = .ep
+                showNewCollectionSheet = true
+            } label: {
+                Label("New Music Project...", systemImage: "plus.circle")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+        } header: {
+            Text("Music Projects")
+        }
+    }
+
+    private func musicProjectRow(_ collection: CollectionRecord) -> some View {
+        let progress = appState.collectionProgress(collection)
+        return Button {
+            appState.toggleSectionFilter(\.selectedCollectionFilter, collection.id)
+        } label: {
+            Label {
+                HStack {
+                    Text(collection.name)
+                    Spacer()
+                    Text("\(progress.done)/\(progress.total)")
+                        .foregroundStyle(.secondary)
+                        .font(.caption)
+                        .monospacedDigit()
+                }
+            } icon: {
+                Image(systemName: collection.status == .released ? "checkmark.seal.fill" : collection.kind.icon)
+                    .foregroundStyle(.tint)
+            }
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(
+            appState.selectedCollectionFilter == collection.id
+                ? theme.surfaceSelected
+                : Color.clear
+        )
+        .contextMenu {
+            Button("Rename...") {
+                renameText = collection.name
+                collectionToRename = collection
+            }
+
+            Menu("Set Status") {
+                ForEach(CollectionStatus.allCases, id: \.self) { status in
+                    Button {
+                        var updated = collection
+                        updated.status = status
+                        Task {
+                            do {
+                                try await appState.updateCollection(updated)
+                            } catch {
+                                appState.reportError("Failed to Update Music Project", error)
+                            }
+                        }
+                    } label: {
+                        if collection.status == status {
+                            Label(status.label, systemImage: "checkmark")
+                        } else {
+                            Label(status.label, systemImage: status.icon)
+                        }
+                    }
+                }
+            }
+
+            Menu("Set Type") {
+                ForEach(CollectionKind.allCases, id: \.self) { kind in
+                    Button {
+                        var updated = collection
+                        updated.kind = kind
+                        Task {
+                            do {
+                                try await appState.updateCollection(updated)
+                            } catch {
+                                appState.reportError("Failed to Update Music Project", error)
+                            }
+                        }
+                    } label: {
+                        if collection.kind == kind {
+                            Label(kind.label, systemImage: "checkmark")
+                        } else {
+                            Label(kind.label, systemImage: kind.icon)
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            Button("Delete Music Project", role: .destructive) {
+                Task {
+                    do {
+                        try await appState.deleteCollection(collection)
+                    } catch {
+                        appState.reportError("Failed to Delete Music Project", error)
+                    }
+                }
+            }
+        }
+    }
+
+    private var newCollectionSheet: some View {
+        VStack(spacing: 16) {
+            Text("New Music Project")
+                .font(.headline)
+
+            TextField("Name (e.g. Summer EP)", text: $newCollectionName)
+                .textFieldStyle(.roundedBorder)
+                .frame(width: 240)
+
+            Picker("Type", selection: $newCollectionKind) {
+                ForEach(CollectionKind.allCases, id: \.self) { kind in
+                    Text(kind.label).tag(kind)
+                }
+            }
+            .pickerStyle(.menu)
+            .fixedSize()
+
+            HStack {
+                Button("Cancel") {
+                    showNewCollectionSheet = false
+                }
+                .keyboardShortcut(.cancelAction)
+
+                Button("Create") {
+                    let name = newCollectionName.trimmingCharacters(in: .whitespaces)
+                    guard !name.isEmpty else { return }
+                    Task {
+                        do {
+                            let collection = try await appState.createCollection(name: name, kind: newCollectionKind)
+                            appState.selectedCollectionFilter = collection.id
+                        } catch {
+                            appState.reportError("Failed to Create Music Project", error)
+                        }
+                        showNewCollectionSheet = false
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(newCollectionName.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+        }
+        .padding()
+        .frame(width: 300)
     }
 
     // MARK: - Library Section (Always First)
@@ -106,6 +299,8 @@ struct SidebarView: View {
     @ViewBuilder
     private func sectionView(for section: SidebarSection) -> some View {
         switch section {
+        case .musicProjects:
+            musicProjectsSection
         case .status:
             statusSection
         case .colors:
@@ -132,11 +327,7 @@ struct SidebarView: View {
         Section(isExpanded: expansionBinding(for: .status)) {
             ForEach(CompletionStatus.allCases, id: \.self) { status in
                 Button {
-                    if appState.selectedStatusFilter == status {
-                        appState.selectedStatusFilter = nil
-                    } else {
-                        appState.selectedStatusFilter = status
-                    }
+                    appState.toggleSectionFilter(\.selectedStatusFilter, status)
                 } label: {
                     Label {
                         HStack {
@@ -172,11 +363,7 @@ struct SidebarView: View {
                 let count = appState.colorLabelCount(for: label)
                 if count > 0 {
                     Button {
-                        if appState.selectedColorLabelFilter == label {
-                            appState.selectedColorLabelFilter = nil
-                        } else {
-                            appState.selectedColorLabelFilter = label
-                        }
+                        appState.toggleSectionFilter(\.selectedColorLabelFilter, label)
                     } label: {
                         Label {
                             HStack {
@@ -212,11 +399,7 @@ struct SidebarView: View {
             Section(isExpanded: expansionBinding(for: .plugins)) {
                 ForEach(appState.uniquePlugins.prefix(20), id: \.self) { plugin in
                     Button {
-                        if appState.selectedPluginFilter == plugin {
-                            appState.selectedPluginFilter = nil
-                        } else {
-                            appState.selectedPluginFilter = plugin
-                        }
+                        appState.toggleSectionFilter(\.selectedPluginFilter, plugin)
                     } label: {
                         Label {
                             HStack {
@@ -258,11 +441,7 @@ struct SidebarView: View {
             Section(isExpanded: expansionBinding(for: .keys)) {
                 ForEach(appState.uniqueKeys, id: \.self) { key in
                     Button {
-                        if appState.selectedKeyFilter == key {
-                            appState.selectedKeyFilter = nil
-                        } else {
-                            appState.selectedKeyFilter = key
-                        }
+                        appState.toggleSectionFilter(\.selectedKeyFilter, key)
                     } label: {
                         Label {
                             HStack {
@@ -299,11 +478,7 @@ struct SidebarView: View {
             Section(isExpanded: expansionBinding(for: .folders)) {
                 ForEach(foldersWithMultipleVersions.prefix(20), id: \.self) { folder in
                     Button {
-                        if appState.selectedFolderFilter == folder {
-                            appState.selectedFolderFilter = nil
-                        } else {
-                            appState.selectedFolderFilter = folder
-                        }
+                        appState.toggleSectionFilter(\.selectedFolderFilter, folder)
                     } label: {
                         Label {
                             HStack {
@@ -345,11 +520,7 @@ struct SidebarView: View {
             Section(isExpanded: expansionBinding(for: .tags)) {
                 ForEach(appState.uniqueTags, id: \.self) { tag in
                     Button {
-                        if appState.selectedTagFilter == tag {
-                            appState.selectedTagFilter = nil
-                        } else {
-                            appState.selectedTagFilter = tag
-                        }
+                        appState.toggleSectionFilter(\.selectedTagFilter, tag)
                     } label: {
                         Label {
                             HStack {
@@ -385,11 +556,7 @@ struct SidebarView: View {
             Section(isExpanded: expansionBinding(for: .volumes)) {
                 ForEach(appState.uniqueVolumes, id: \.self) { volume in
                     Button {
-                        if appState.selectedVolumeFilter == volume {
-                            appState.selectedVolumeFilter = nil
-                        } else {
-                            appState.selectedVolumeFilter = volume
-                        }
+                        appState.toggleSectionFilter(\.selectedVolumeFilter, volume)
                     } label: {
                         Label {
                             HStack {
@@ -490,18 +657,21 @@ struct SidebarView: View {
             }
 
             Button {
-                Task {
-                    await appState.startScan()
+                if appState.isScanning {
+                    appState.cancelScan()
+                } else {
+                    Task {
+                        await appState.startScan()
+                    }
                 }
             } label: {
                 Label(
-                    appState.isScanning ? "Scanning..." : "Scan All Locations",
-                    systemImage: appState.isScanning ? "arrow.triangle.2.circlepath" : "arrow.clockwise"
+                    appState.isScanning ? "Stop Scan" : "Scan All Locations",
+                    systemImage: appState.isScanning ? "stop.circle" : "arrow.clockwise"
                 )
                 .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(appState.isScanning)
             .contextMenu {
                 Button("Force Re-scan All") {
                     Task {
@@ -534,16 +704,7 @@ struct SidebarView: View {
     // MARK: - Computed Properties
 
     private var hasActiveFilters: Bool {
-        appState.selectedStatusFilter != nil ||
-        appState.selectedColorLabelFilter != nil ||
-        appState.selectedVolumeFilter != nil ||
-        appState.selectedTagFilter != nil ||
-        appState.selectedPluginFilter != nil ||
-        appState.selectedKeyFilter != nil ||
-        appState.selectedFolderFilter != nil ||
-        appState.showFavoritesOnly ||
-        appState.showDuplicatesOnly ||
-        appState.selectedFilter != .all
+        appState.hasActiveFilters
     }
 
     private var foldersWithMultipleVersions: [String] {
@@ -553,16 +714,9 @@ struct SidebarView: View {
     // MARK: - Helper Functions
 
     private func clearAllFilters() {
-        appState.selectedStatusFilter = nil
-        appState.selectedColorLabelFilter = nil
-        appState.selectedVolumeFilter = nil
-        appState.selectedTagFilter = nil
-        appState.selectedPluginFilter = nil
-        appState.selectedKeyFilter = nil
-        appState.selectedFolderFilter = nil
-        appState.showFavoritesOnly = false
-        appState.showDuplicatesOnly = false
-        appState.selectedFilter = .all
+        // AppState's version also clears search + music-project filter and
+        // batches everything into one recompute.
+        appState.clearAllFilters()
     }
 
     @ViewBuilder

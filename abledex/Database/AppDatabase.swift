@@ -106,6 +106,22 @@ final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v5") { db in
+            // Music projects (EP/album/single) grouping Ableton projects
+            try db.create(table: "collections") { t in
+                t.column("id", .blob).primaryKey()
+                t.column("name", .text).notNull()
+                t.column("kind", .integer).notNull().defaults(to: 0)
+                t.column("status", .integer).notNull().defaults(to: 0)
+                t.column("notes", .text)
+                t.column("createdAt", .datetime).notNull()
+            }
+            try db.alter(table: "projects") { t in
+                t.add(column: "collectionID", .blob)
+            }
+            try db.create(index: "projects_on_collectionID", on: "projects", columns: ["collectionID"])
+        }
+
         return migrator
     }
 }
@@ -157,17 +173,17 @@ extension AppDatabase {
     }
 
     func deleteProject(id: UUID) async throws {
+        // NB: GRDB stores UUIDs as 16-byte blobs — binding uuidString (text)
+        // matches nothing. Bind the UUID itself.
         _ = try await dbWriter.write { db in
-            try db.execute(sql: "DELETE FROM projects WHERE id = ?", arguments: [id.uuidString])
+            try ProjectRecord.filter(ProjectRecord.Columns.id == id).deleteAll(db)
         }
     }
 
     func deleteProjects(ids: [UUID]) async throws {
         guard !ids.isEmpty else { return }
         try await dbWriter.write { db in
-            let placeholders = ids.map { _ in "?" }.joined(separator: ", ")
-            let sql = "DELETE FROM projects WHERE id IN (\(placeholders))"
-            try db.execute(sql: sql, arguments: StatementArguments(ids.map { $0.uuidString }))
+            _ = try ProjectRecord.filter(ids.contains(ProjectRecord.Columns.id)).deleteAll(db)
         }
     }
 
@@ -258,6 +274,45 @@ extension AppDatabase {
     }
 }
 
+// MARK: - Collection Operations
+
+extension AppDatabase {
+    func saveCollection(_ collection: CollectionRecord) async throws {
+        try await dbWriter.write { db in
+            try collection.save(db)
+        }
+    }
+
+    func deleteCollection(id: UUID) async throws {
+        try await dbWriter.write { db in
+            try db.execute(
+                sql: "UPDATE projects SET collectionID = NULL WHERE collectionID = ?",
+                arguments: [id]
+            )
+            _ = try CollectionRecord.filter(CollectionRecord.Columns.id == id).deleteAll(db)
+        }
+    }
+
+    func fetchAllCollections() async throws -> [CollectionRecord] {
+        try await dbWriter.read { db in
+            try CollectionRecord.order(CollectionRecord.Columns.name).fetchAll(db)
+        }
+    }
+
+    func assignProjects(ids: [UUID], toCollection collectionID: UUID?) async throws {
+        guard !ids.isEmpty else { return }
+        try await dbWriter.write { db in
+            let placeholders = ids.map { _ in "?" }.joined(separator: ", ")
+            var arguments: [(any DatabaseValueConvertible)?] = [collectionID]
+            arguments.append(contentsOf: ids)
+            try db.execute(
+                sql: "UPDATE projects SET collectionID = ? WHERE id IN (\(placeholders))",
+                arguments: StatementArguments(arguments)
+            )
+        }
+    }
+}
+
 // MARK: - Location Operations
 
 extension AppDatabase {
@@ -269,7 +324,7 @@ extension AppDatabase {
 
     func deleteLocation(id: UUID) async throws {
         _ = try await dbWriter.write { db in
-            try db.execute(sql: "DELETE FROM locations WHERE id = ?", arguments: [id.uuidString])
+            try LocationRecord.filter(LocationRecord.Columns.id == id).deleteAll(db)
         }
     }
 
@@ -300,7 +355,7 @@ extension AppDatabase {
         try await dbWriter.write { db in
             try db.execute(
                 sql: "UPDATE locations SET projectCount = ?, lastScannedAt = ? WHERE id = ?",
-                arguments: [count, Date(), id.uuidString]
+                arguments: [count, Date(), id]
             )
         }
     }

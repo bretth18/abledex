@@ -20,13 +20,36 @@ struct ContentView: View {
             SidebarView()
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 300)
         } content: {
-            ProjectTableView()
-                .navigationSplitViewColumnWidth(min: 400, ideal: 600)
+            VStack(spacing: 0) {
+                if let collection = activeCollection {
+                    CollectionHeaderView(collection: collection)
+                }
+
+                if appState.useNSTableView {
+                    ProjectNSTableWrapperView()
+                } else {
+                    ProjectTableView()
+                }
+            }
+            .navigationSplitViewColumnWidth(min: 400, ideal: 600)
                 .navigationTitle(navigationTitle)
-                .navigationSubtitle("\(appState.filteredProjects.count) projects")
+                .navigationSubtitle("^[\(appState.filteredProjects.count) project](inflect: true)")
                 .searchable(text: $state.searchQuery, prompt: "Search projects, plugins, tags...")
                 .toolbar {
                     ToolbarItemGroup {
+                        #if DEBUG
+                        // A/B performance toggle — developer-only
+                        Button {
+                            appState.useNSTableView.toggle()
+                        } label: {
+                            Label(
+                                appState.useNSTableView ? "NSTableView" : "SwiftUI Table",
+                                systemImage: appState.useNSTableView ? "tablecells" : "tablecells.badge.ellipsis"
+                            )
+                        }
+                        .help(appState.useNSTableView ? "Using NSTableView (AppKit) — click to switch to SwiftUI" : "Using SwiftUI Table — click to switch to NSTableView (AppKit)")
+                        #endif
+
                         Button {
                             showStatistics = true
                         } label: {
@@ -49,9 +72,29 @@ struct ContentView: View {
         .sheet(isPresented: $showStatistics) {
             StatisticsView()
         }
+        .alert(
+            appState.activeError?.title ?? "Something Went Wrong",
+            isPresented: Binding(
+                get: { appState.activeError != nil },
+                set: { if !$0 { appState.activeError = nil } }
+            ),
+            presenting: appState.activeError
+        ) { _ in
+            Button("OK", role: .cancel) {}
+        } message: { error in
+            Text(error.message)
+        }
+    }
+
+    private var activeCollection: CollectionRecord? {
+        guard let id = appState.selectedCollectionFilter else { return nil }
+        return appState.collections.first { $0.id == id }
     }
 
     private var navigationTitle: String {
+        if let collection = activeCollection {
+            return collection.name
+        }
         if let tagFilter = appState.selectedTagFilter {
             return "Tag: \(tagFilter)"
         }

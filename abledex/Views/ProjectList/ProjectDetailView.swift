@@ -40,19 +40,42 @@ struct ProjectDetailView: View {
         .frame(minWidth: 300)
         .onAppear {
             editingNotes = project.userNotes ?? ""
-            loadPreviewableAudio()
         }
-        .onChange(of: project.id) {
+        .onChange(of: project.id) { oldID, _ in
+            // Save pending note edits before switching — silently discarding
+            // typed text is the worst kind of data loss.
+            if isEditingNotes,
+               let oldProject = appState.projects.first(where: { $0.id == oldID }),
+               editingNotes != (oldProject.userNotes ?? "") {
+                let notes = editingNotes
+                Task {
+                    do {
+                        try await appState.updateProjectNotes(oldProject, notes: notes)
+                    } catch {
+                        appState.reportError("Failed to Save Notes", error)
+                    }
+                }
+            }
             editingNotes = project.userNotes ?? ""
             isEditingNotes = false
             appState.audioPreview.stop()
-            loadPreviewableAudio()
+        }
+        .task(id: project.id) {
+            // Auto-cancelled on selection change, so a slow older load can't
+            // land after a newer one and show the wrong project's audio.
+            let audio = await appState.audioPreview.findPreviewableAudio(in: project.folderPath)
+            if !Task.isCancelled {
+                previewableAudio = audio
+            }
         }
         .onDisappear {
             appState.audioPreview.stop()
         }
         .onReceive(NotificationCenter.default.publisher(for: UserDefaults.didChangeNotification)) { _ in
-            sectionOrder = DetailOrderStorage.order
+            let newOrder = DetailOrderStorage.order
+            if sectionOrder != newOrder {
+                sectionOrder = newOrder
+            }
         }
     }
 
@@ -102,17 +125,6 @@ struct ProjectDetailView: View {
             VersionTimelineSection(project: project)
         case .notes:
             notesSection
-        }
-    }
-
-    private func loadPreviewableAudio() {
-        let folderPath = project.folderPath
-        let audioService = appState.audioPreview
-        Task.detached {
-            let audio = await audioService.findPreviewableAudio(in: folderPath)
-            await MainActor.run {
-                previewableAudio = audio
-            }
         }
     }
 

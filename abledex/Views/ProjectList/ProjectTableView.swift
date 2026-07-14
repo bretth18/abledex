@@ -10,9 +10,11 @@ import SwiftUI
 struct ProjectTableView: View {
     @Environment(AppState.self) private var appState
     @Environment(\.theme) private var theme
+    @AppStorage("showMissingSamplesWarning") private var showMissingSamplesWarning = true
     @State private var showDeleteConfirmation = false
     @State private var showBatchTagSheet = false
     @State private var batchTagInput = ""
+    @State private var sortOrder: [KeyPathComparator<ProjectRecord>] = []
 
     var body: some View {
         @Bindable var state = appState
@@ -23,21 +25,26 @@ struct ProjectTableView: View {
                 batchToolbar
             }
 
-            Table(of: ProjectRecord.self, selection: $state.selectedProjectIDs) {
+            Table(of: ProjectRecord.self, selection: $state.selectedProjectIDs, sortOrder: $sortOrder) {
                 TableColumn("") { project in
                     Button {
                         Task {
-                            try? await appState.toggleFavorite(project)
+                            do {
+                                try await appState.toggleFavorite(project)
+                            } catch {
+                                appState.reportError("Failed to Update Favorite", error)
+                            }
                         }
                     } label: {
                         Image(systemName: project.isFavorite ? "star.fill" : "star")
                             .foregroundStyle(project.isFavorite ? .yellow : .secondary)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel(project.isFavorite ? "Remove Favorite" : "Add Favorite")
                 }
                 .width(24)
 
-                TableColumn("Name") { project in
+                TableColumn("Name", value: \.name) { project in
                     HStack {
                         Image(systemName: "music.note")
                             .foregroundStyle(project.colorLabel.rawValue != 0 ? project.colorLabel.color : .secondary)
@@ -45,17 +52,23 @@ struct ProjectTableView: View {
                             Text(project.name)
                                 .lineLimit(1)
                                 .foregroundStyle(project.colorLabel.color)
-                            if project.hasMissingSamples {
+                            if project.hasMissingSamples && showMissingSamplesWarning {
                                 Label("Missing samples", systemImage: "exclamationmark.triangle.fill")
                                     .font(.caption2)
                                     .foregroundStyle(.orange)
                             }
+                            if !appState.isVolumeOnline(project) {
+                                Label("Drive offline", systemImage: "externaldrive.badge.xmark")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
                         }
                     }
+                    .opacity(appState.isVolumeOnline(project) ? 1 : 0.5)
                 }
                 .width(min: 150, ideal: 200)
 
-                TableColumn("Status") { project in
+                TableColumn("Status", value: \.sortableStatus) { project in
                     HStack(spacing: 4) {
                         Image(systemName: project.completionStatus.icon)
                             .foregroundStyle(theme.statusColor(for: project.completionStatus))
@@ -66,7 +79,7 @@ struct ProjectTableView: View {
                 }
                 .width(min: 80, ideal: 100)
 
-                TableColumn("BPM") { project in
+                TableColumn("BPM", value: \.sortableBPM) { project in
                     if let bpm = project.bpm {
                         Text(String(format: "%.0f", bpm))
                             .monospacedDigit()
@@ -77,7 +90,7 @@ struct ProjectTableView: View {
                 }
                 .width(50)
 
-                TableColumn("Created") { project in
+                TableColumn("Created", value: \.sortableCreated) { project in
                     if let date = project.createdDate {
                         Text(date, style: .date)
                             .foregroundStyle(.secondary)
@@ -88,14 +101,16 @@ struct ProjectTableView: View {
                 }
                 .width(min: 80, ideal: 100)
 
-                TableColumn("Modified") { project in
+                TableColumn("Modified", value: \.sortableModified) { project in
                     let date = project.modifiedDate ?? project.filesystemModifiedDate
-                    Text(date, style: .relative)
+                    // Formatted once — Text(_, style: .relative) schedules per-second
+                    // re-renders for every visible row
+                    Text(date.formatted(.relative(presentation: .named)))
                         .foregroundStyle(.secondary)
                 }
                 .width(min: 80, ideal: 100)
 
-                TableColumn("Tracks") { project in
+                TableColumn("Tracks", value: \.totalTrackCount) { project in
                     HStack(spacing: 4) {
                         if project.audioTrackCount > 0 {
                             Label("\(project.audioTrackCount)", systemImage: "waveform")
@@ -110,7 +125,7 @@ struct ProjectTableView: View {
                 }
                 .width(min: 60, ideal: 80)
 
-                TableColumn("Duration") { project in
+                TableColumn("Duration", value: \.sortableDuration) { project in
                     if let duration = project.formattedDuration {
                         Text(duration)
                             .monospacedDigit()
@@ -122,7 +137,7 @@ struct ProjectTableView: View {
                 }
                 .width(60)
 
-                TableColumn("Version") { project in
+                TableColumn("Version", value: \.sortableVersion) { project in
                     if let version = project.abletonVersion {
                         Text(version)
                             .font(.caption)
@@ -135,9 +150,14 @@ struct ProjectTableView: View {
                 .width(60)
 
                 TableColumn("Volume") { project in
-                    Label(project.sourceVolume, systemImage: project.sourceVolume == "Macintosh HD" ? "internaldrive" : "externaldrive")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    Label(
+                        project.sourceVolume,
+                        systemImage: appState.isVolumeOnline(project)
+                            ? (project.sourceVolume == "Macintosh HD" ? "internaldrive" : "externaldrive")
+                            : "externaldrive.badge.xmark"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 }
                 .width(min: 80, ideal: 120)
                 
@@ -161,6 +181,35 @@ struct ProjectTableView: View {
             }
             .tableStyle(.inset(alternatesRowBackgrounds: !theme.usesCustomBackground))
             .scrollContentBackground(theme.usesCustomBackground ? .hidden : .automatic)
+            .overlay {
+                if appState.filteredProjects.isEmpty {
+                    if appState.projects.isEmpty {
+                        ContentUnavailableView {
+                            Label("No Projects Yet", systemImage: "music.note.list")
+                        } description: {
+                            Text("Scan your locations to index your Ableton projects and sets.")
+                        } actions: {
+                            Button("Scan All Locations") {
+                                Task { await appState.startScan() }
+                            }
+                            .disabled(appState.isScanning)
+                        }
+                    } else if !appState.searchQuery.isEmpty {
+                        ContentUnavailableView.search(text: appState.searchQuery)
+                            .allowsHitTesting(false) // no actions — don't swallow table clicks
+                    } else {
+                        ContentUnavailableView {
+                            Label("No Matching Projects", systemImage: "line.3.horizontal.decrease.circle")
+                        } description: {
+                            Text("No projects match the current filters.")
+                        } actions: {
+                            Button("Clear Filters") {
+                                appState.clearAllFilters()
+                            }
+                        }
+                    }
+                }
+            }
             .onDeleteCommand {
                 if !appState.selectedProjectIDs.isEmpty {
                     showDeleteConfirmation = true
@@ -183,13 +232,17 @@ struct ProjectTableView: View {
             }
         }
         .confirmationDialog(
-            "Remove \(appState.selectedProjectIDs.count) project\(appState.selectedProjectIDs.count == 1 ? "" : "s") from library?",
+            "Remove ^[\(appState.selectedProjectIDs.count) project](inflect: true) from library?",
             isPresented: $showDeleteConfirmation,
             titleVisibility: .visible
         ) {
             Button("Remove", role: .destructive) {
                 Task {
-                    try? await appState.deleteSelectedProjects()
+                    do {
+                        try await appState.deleteSelectedProjects()
+                    } catch {
+                        appState.reportError("Failed to Remove Projects", error)
+                    }
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -199,6 +252,58 @@ struct ProjectTableView: View {
         .sheet(isPresented: $showBatchTagSheet) {
             batchTagSheet
         }
+        .onAppear {
+            syncSortOrderFromAppState()
+        }
+        .onChange(of: sortOrder) {
+            applySortOrderToAppState()
+        }
+        .onChange(of: appState.sortColumn) {
+            syncSortOrderFromAppState()
+        }
+        .onChange(of: appState.sortAscending) {
+            syncSortOrderFromAppState()
+        }
+    }
+
+    // MARK: - Header Sort Sync
+
+    private func syncSortOrderFromAppState() {
+        let order: SortOrder = appState.sortAscending ? .forward : .reverse
+        switch appState.sortColumn {
+        case .name: sortOrder = [KeyPathComparator(\.name, order: order)]
+        case .status: sortOrder = [KeyPathComparator(\.sortableStatus, order: order)]
+        case .bpm: sortOrder = [KeyPathComparator(\.sortableBPM, order: order)]
+        case .createdDate: sortOrder = [KeyPathComparator(\.sortableCreated, order: order)]
+        case .modifiedDate: sortOrder = [KeyPathComparator(\.sortableModified, order: order)]
+        case .tracks: sortOrder = [KeyPathComparator(\.totalTrackCount, order: order)]
+        case .duration: sortOrder = [KeyPathComparator(\.sortableDuration, order: order)]
+        case .version: sortOrder = [KeyPathComparator(\.sortableVersion, order: order)]
+        case .lastOpened: sortOrder = [] // not shown as a column
+        }
+    }
+
+    private func applySortOrderToAppState() {
+        guard let comparator = sortOrder.first else { return }
+
+        let column: SortColumn?
+        switch comparator.keyPath {
+        case \ProjectRecord.name: column = .name
+        case \ProjectRecord.sortableStatus: column = .status
+        case \ProjectRecord.sortableBPM: column = .bpm
+        case \ProjectRecord.sortableCreated: column = .createdDate
+        case \ProjectRecord.sortableModified: column = .modifiedDate
+        case \ProjectRecord.totalTrackCount: column = .tracks
+        case \ProjectRecord.sortableDuration: column = .duration
+        case \ProjectRecord.sortableVersion: column = .version
+        default: column = nil
+        }
+        guard let column else { return }
+
+        // Change-guarded so the round-trip through appState can't loop
+        let ascending = comparator.order == .forward
+        if appState.sortColumn != column { appState.sortColumn = column }
+        if appState.sortAscending != ascending { appState.sortAscending = ascending }
     }
 
     // MARK: - Batch Toolbar
@@ -306,7 +411,9 @@ struct ProjectTableView: View {
 
     @ViewBuilder
     private func contextMenu(for project: ProjectRecord) -> some View {
-        if appState.selectedProjectIDs.count > 1 {
+        // Batch menu only when the clicked row is part of the multi-selection —
+        // right-clicking an unselected row must act on that row, not the others.
+        if appState.selectedProjectIDs.count > 1 && appState.selectedProjectIDs.contains(project.id) {
             // Multi-selection context menu
             Button("Open \(appState.selectedProjectIDs.count) Projects in Ableton") {
                 for proj in appState.selectedProjects {
@@ -337,6 +444,8 @@ struct ProjectTableView: View {
                     try? await appState.batchToggleFavorite(true)
                 }
             }
+
+            musicProjectMenu(for: appState.selectedProjectIDs)
 
             Button("Re-scan \(appState.selectedProjectIDs.count) Projects") {
                 Task {
@@ -386,6 +495,8 @@ struct ProjectTableView: View {
                 }
             }
 
+            musicProjectMenu(for: [project.id], currentCollectionID: project.collectionID)
+
             Button("Re-scan Project") {
                 Task {
                     await appState.rescanProject(project)
@@ -405,6 +516,54 @@ struct ProjectTableView: View {
         }
     }
 
+    // MARK: - Music Project Menu
+
+    @ViewBuilder
+    private func musicProjectMenu(for projectIDs: Set<UUID>, currentCollectionID: UUID? = nil) -> some View {
+        Menu("Music Project") {
+            ForEach(appState.collections) { collection in
+                Button {
+                    assign(projectIDs, to: collection.id)
+                } label: {
+                    if currentCollectionID == collection.id {
+                        Label(collection.name, systemImage: "checkmark")
+                    } else {
+                        Label(collection.name, systemImage: collection.kind.icon)
+                    }
+                }
+            }
+
+            if !appState.collections.isEmpty {
+                Divider()
+            }
+
+            if currentCollectionID != nil {
+                Button("Remove from Music Project") {
+                    assign(projectIDs, to: nil)
+                }
+            }
+        }
+    }
+
+    private func assign(_ projectIDs: Set<UUID>, to collectionID: UUID?) {
+        Task {
+            do {
+                try await appState.assignProjects(projectIDs, toCollection: collectionID)
+            } catch {
+                appState.reportError("Failed to Update Music Project", error)
+            }
+        }
+    }
+}
+
+// Non-optional surrogates so optional fields get Comparable sort keypaths
+private extension ProjectRecord {
+    var sortableStatus: Int { completionStatus.rawValue }
+    var sortableBPM: Double { bpm ?? 0 }
+    var sortableCreated: Date { createdDate ?? filesystemModifiedDate }
+    var sortableModified: Date { modifiedDate ?? filesystemModifiedDate }
+    var sortableDuration: Double { duration ?? 0 }
+    var sortableVersion: String { abletonVersion ?? "" }
 }
 
 

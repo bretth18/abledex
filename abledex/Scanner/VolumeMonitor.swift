@@ -7,13 +7,28 @@
 
 import Foundation
 import DiskArbitration
+import Synchronization
 
 final class VolumeMonitor: Sendable {
     private let session: DASession
     private let queue: DispatchQueue
+    private let isMonitoring = Mutex(false)
 
     private let onMount: @Sendable (URL, String) -> Void
     private let onUnmount: @Sendable (URL, String) -> Void
+
+    // Stable function pointers so register and unregister refer to the same callback
+    private static let appearedCallback: DADiskAppearedCallback = { disk, context in
+        guard let context = context else { return }
+        let monitor = Unmanaged<VolumeMonitor>.fromOpaque(context).takeUnretainedValue()
+        monitor.handleDiskAppeared(disk)
+    }
+
+    private static let disappearedCallback: DADiskDisappearedCallback = { disk, context in
+        guard let context = context else { return }
+        let monitor = Unmanaged<VolumeMonitor>.fromOpaque(context).takeUnretainedValue()
+        monitor.handleDiskDisappeared(disk)
+    }
 
     init(
         onMount: @escaping @Sendable (URL, String) -> Void,
@@ -29,38 +44,36 @@ final class VolumeMonitor: Sendable {
         self.session = session
     }
 
+    deinit {
+        stop()
+    }
+
     func start() {
+        let alreadyMonitoring = isMonitoring.withLock { monitoring in
+            defer { monitoring = true }
+            return monitoring
+        }
+        guard !alreadyMonitoring else { return }
+
         DASessionSetDispatchQueue(session, queue)
 
-        // Create context for callbacks
+        // Context is passed unretained; stop() must unregister before self deallocates
         let contextPtr = Unmanaged.passUnretained(self).toOpaque()
 
-        // Register for mount notifications
-        DARegisterDiskAppearedCallback(
-            session,
-            nil, // Match all disks
-            { disk, context in
-                guard let context = context else { return }
-                let monitor = Unmanaged<VolumeMonitor>.fromOpaque(context).takeUnretainedValue()
-                monitor.handleDiskAppeared(disk)
-            },
-            contextPtr
-        )
-
-        // Register for unmount notifications
-        DARegisterDiskDisappearedCallback(
-            session,
-            nil,
-            { disk, context in
-                guard let context = context else { return }
-                let monitor = Unmanaged<VolumeMonitor>.fromOpaque(context).takeUnretainedValue()
-                monitor.handleDiskDisappeared(disk)
-            },
-            contextPtr
-        )
+        DARegisterDiskAppearedCallback(session, nil, Self.appearedCallback, contextPtr)
+        DARegisterDiskDisappearedCallback(session, nil, Self.disappearedCallback, contextPtr)
     }
 
     func stop() {
+        let wasMonitoring = isMonitoring.withLock { monitoring in
+            defer { monitoring = false }
+            return monitoring
+        }
+        guard wasMonitoring else { return }
+
+        let contextPtr = Unmanaged.passUnretained(self).toOpaque()
+        DAUnregisterCallback(session, unsafeBitCast(Self.appearedCallback, to: UnsafeMutableRawPointer.self), contextPtr)
+        DAUnregisterCallback(session, unsafeBitCast(Self.disappearedCallback, to: UnsafeMutableRawPointer.self), contextPtr)
         DASessionSetDispatchQueue(session, nil)
     }
 

@@ -18,7 +18,28 @@ struct DiscoveredProject: Sendable {
 
 struct FileSystemCrawler: Sendable {
 
-    func findProjects(in directory: URL) -> [DiscoveredProject] {
+    /// Directory names whose entire subtrees are skipped during crawling.
+    /// These never contain a user's main .als files and can hold thousands of entries.
+    /// "Samples" is handled separately — it's only Ableton-managed when it sits
+    /// inside a project folder; a user-level folder named Samples may hold projects.
+    private static let skippedDirectoryNames: Set<String> = [
+        "Backup", "Trash", "Ableton Project Info"
+    ]
+
+    /// True when `directory` directly contains an .als file — i.e. it is an
+    /// Ableton project folder, so its Samples/ subfolder is Ableton-managed.
+    private static func isAbletonProjectFolder(_ directory: URL, cache: inout [String: Bool]) -> Bool {
+        let key = directory.path
+        if let cached = cache[key] { return cached }
+        let containsALS = (try? FileManager.default.contentsOfDirectory(atPath: key))?
+            .contains { $0.lowercased().hasSuffix(".als") } ?? false
+        cache[key] = containsALS
+        return containsALS
+    }
+
+    /// Crawls `directory` for .als project files.
+    /// Throws `CancellationError` if the surrounding task is cancelled mid-crawl.
+    func findProjects(in directory: URL) throws -> [DiscoveredProject] {
         var projects: [DiscoveredProject] = []
         let fm = FileManager.default
 
@@ -40,21 +61,36 @@ struct FileSystemCrawler: Sendable {
             return []
         }
 
+        var entryCount = 0
+        var projectFolderCache: [String: Bool] = [:]
+
         while let fileURL = enumerator.nextObject() as? URL {
+            entryCount += 1
+            // Crawl is synchronous — poll for cancellation periodically
+            if entryCount % 100 == 0, Task.isCancelled {
+                throw CancellationError()
+            }
+
+            let resourceValues = try? fileURL.resourceValues(forKeys: resourceKeys)
+
+            // Prune entire subtrees that never contain main project files
+            // instead of enumerating and filtering thousands of entries.
+            if resourceValues?.isDirectory == true {
+                let name = fileURL.lastPathComponent
+                if Self.skippedDirectoryNames.contains(name) {
+                    enumerator.skipDescendants()
+                } else if name == "Samples",
+                          Self.isAbletonProjectFolder(fileURL.deletingLastPathComponent(), cache: &projectFolderCache) {
+                    enumerator.skipDescendants()
+                }
+                continue
+            }
+
             guard fileURL.pathExtension.lowercased() == "als" else {
                 continue
             }
 
-            // Skip backup folders
-            let pathComponents = fileURL.pathComponents
-            if pathComponents.contains("Backup") || pathComponents.contains("Trash") {
-                continue
-            }
-
             let folderURL = fileURL.deletingLastPathComponent()
-
-            // Get file attributes
-            let resourceValues = try? fileURL.resourceValues(forKeys: resourceKeys)
             let modDate = resourceValues?.contentModificationDate ?? Date()
             let createDate = resourceValues?.creationDate ?? modDate
 
@@ -127,24 +163,24 @@ struct FileSystemCrawler: Sendable {
     }
 
     static func defaultScanLocations() -> [URL] {
-        var locations: [URL] = []
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let fm = FileManager.default
+        let home = fm.homeDirectoryForCurrentUser
 
-        let abletonMusic = home.appendingPathComponent("Music/Ableton")
-        if FileManager.default.fileExists(atPath: abletonMusic.path) {
-            locations.append(abletonMusic)
+        let candidates = [
+            home.appendingPathComponent("Music/Ableton"),
+            home.appendingPathComponent("Music"),
+            home.appendingPathComponent("Documents")
+        ].filter { fm.fileExists(atPath: $0.path) }
+
+        // Drop any location that is a descendant of another included location.
+        // Overlapping roots (e.g. ~/Music/Ableton inside ~/Music) would otherwise
+        // discover the same .als files twice and race on insert.
+        return candidates.filter { candidate in
+            let candidatePath = candidate.standardizedFileURL.path
+            return !candidates.contains { other in
+                other != candidate &&
+                candidatePath.hasPrefix(other.standardizedFileURL.path + "/")
+            }
         }
-
-        let music = home.appendingPathComponent("Music")
-        if FileManager.default.fileExists(atPath: music.path) && !locations.contains(music) {
-            locations.append(music)
-        }
-
-        let documents = home.appendingPathComponent("Documents")
-        if FileManager.default.fileExists(atPath: documents.path) {
-            locations.append(documents)
-        }
-
-        return locations
     }
 }
