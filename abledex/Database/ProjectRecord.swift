@@ -97,7 +97,7 @@ enum ColorLabel: Int, Codable, Sendable, CaseIterable {
     }
 }
 
-struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, PersistableRecord {
+struct ProjectRecord: Codable, Sendable, Identifiable, Equatable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "projects"
 
     var id: UUID

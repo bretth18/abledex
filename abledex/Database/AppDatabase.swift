@@ -14,6 +14,9 @@ import GRDB
 nonisolated final class AppDatabase: Sendable {
     private let dbWriter: any DatabaseWriter
 
+    /// Read-only access for ValueObservation.
+    var reader: any DatabaseReader { dbWriter }
+
     private init(dbWriter: any DatabaseWriter) throws {
         self.dbWriter = dbWriter
         try Self.migrator.migrate(dbWriter)
@@ -123,6 +126,21 @@ nonisolated final class AppDatabase: Sendable {
                 t.add(column: "collectionID", .blob)
             }
             try db.create(index: "projects_on_collectionID", on: "projects", columns: ["collectionID"])
+        }
+
+        migrator.registerMigration("v6") { db in
+            // Full-text search over user-visible metadata. Synchronized with the
+            // projects table via triggers (GRDB creates them and backfills).
+            try db.create(virtualTable: "projectsFTS", using: FTS5()) { t in
+                t.synchronize(withTable: "projects")
+                t.tokenizer = .unicode61()
+                t.column("name")
+                t.column("pluginsJSON")
+                t.column("userTagsJSON")
+                t.column("userNotes")
+                t.column("musicalKeysJSON")
+                t.column("folderPath")
+            }
         }
 
         return migrator
@@ -266,6 +284,20 @@ extension AppDatabase {
         }
     }
 
+    /// All indexed projects whose .als file lives under `directoryPath`, keyed by path.
+    /// Uses a range comparison on the unique alsFilePath index ('0' is the character
+    /// after '/'), which stays index-backed and avoids LIKE-escaping issues.
+    func fetchProjects(underPath directoryPath: String) async throws -> [String: ProjectRecord] {
+        let prefix = directoryPath.hasSuffix("/") ? directoryPath : directoryPath + "/"
+        let upperBound = String(prefix.dropLast()) + "0"
+        return try await dbWriter.read { db in
+            let records = try ProjectRecord
+                .filter(ProjectRecord.Columns.alsFilePath >= prefix && ProjectRecord.Columns.alsFilePath < upperBound)
+                .fetchAll(db)
+            return Dictionary(uniqueKeysWithValues: records.map { ($0.alsFilePath, $0) })
+        }
+    }
+
     func fetchProjects(byAlsFilePaths paths: [String]) async throws -> [String: ProjectRecord] {
         guard !paths.isEmpty else { return [:] }
         return try await dbWriter.read { db in
@@ -273,6 +305,28 @@ extension AppDatabase {
                 .filter(paths.contains(ProjectRecord.Columns.alsFilePath))
                 .fetchAll(db)
             return Dictionary(uniqueKeysWithValues: records.map { ($0.alsFilePath, $0) })
+        }
+    }
+
+    func deleteProject(byAlsFilePath path: String) async throws {
+        _ = try await dbWriter.write { db in
+            try ProjectRecord.filter(ProjectRecord.Columns.alsFilePath == path).deleteAll(db)
+        }
+    }
+
+    /// IDs of projects whose indexed text matches `query` (prefix-tokenized, so
+    /// search-as-you-type works). Returns nil when the query yields no valid
+    /// FTS pattern — callers should fall back to their own matching then.
+    func searchProjectIDs(matching query: String) async throws -> Set<UUID>? {
+        guard let pattern = FTS5Pattern(matchingAllPrefixesIn: query) else { return nil }
+        return try await dbWriter.read { db in
+            let ids = try UUID.fetchAll(db, sql: """
+                SELECT projects.id
+                FROM projects
+                JOIN projectsFTS ON projectsFTS.rowid = projects.rowid
+                WHERE projectsFTS MATCH ?
+                """, arguments: [pattern])
+            return Set(ids)
         }
     }
 }

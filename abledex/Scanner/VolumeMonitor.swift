@@ -14,6 +14,11 @@ final class VolumeMonitor: Sendable {
     private let queue: DispatchQueue
     private let isMonitoring = Mutex(false)
 
+    // DiskArbitration replays a "disk appeared" callback for every volume that
+    // is already mounted when callbacks register. Those are launch noise, not
+    // mounts — remember what was mounted at start() and swallow their replay.
+    private let initiallyMountedPaths = Mutex<Set<String>>([])
+
     private let onMount: @Sendable (URL, String) -> Void
     private let onUnmount: @Sendable (URL, String) -> Void
 
@@ -55,6 +60,9 @@ final class VolumeMonitor: Sendable {
         }
         guard !alreadyMonitoring else { return }
 
+        let mounted = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil, options: []) ?? []
+        initiallyMountedPaths.withLock { $0 = Set(mounted.map(\.path)) }
+
         DASessionSetDispatchQueue(session, queue)
 
         // Context is passed unretained; stop() must unregister before self deallocates
@@ -83,6 +91,17 @@ final class VolumeMonitor: Sendable {
               let volumeName = info[kDADiskDescriptionVolumeNameKey as String] as? String else {
             return
         }
+
+        // Swallow the registration-time replay of already-mounted disks; a
+        // volume that later unmounts and reappears is a real mount again.
+        let wasAlreadyMounted = initiallyMountedPaths.withLock { initial in
+            initial.remove(volumePath.path) != nil
+        }
+        if wasAlreadyMounted { return }
+
+        // Only user-visible drives mount under /Volumes — simulator disk
+        // images and cryptexes mount elsewhere and never hold music projects.
+        guard volumePath.path.hasPrefix("/Volumes/") else { return }
 
         // Only notify for mounted volumes (not internal system volumes)
         let isInternal = info[kDADiskDescriptionDeviceInternalKey as String] as? Bool ?? true

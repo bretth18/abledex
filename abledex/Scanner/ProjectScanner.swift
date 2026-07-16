@@ -113,6 +113,13 @@ nonisolated final class ProjectScanner: Sendable {
         try await scanLocation(location, forceReparse: forceReparse, coordinator: nil, progress: progress)
     }
 
+    /// Parse workers per location. Bounds peak memory (each in-flight parse holds
+    /// one decompressed project) while keeping the CPU busy alongside disk crawling.
+    private static let parseConcurrency = max(2, min(6, ProcessInfo.processInfo.activeProcessorCount - 2))
+
+    /// How many parsed records accumulate before a database write.
+    private static let saveChunkSize = 50
+
     @concurrent
     private func scanLocation(
         _ location: LocationRecord,
@@ -124,42 +131,74 @@ nonisolated final class ProjectScanner: Sendable {
 
         progress(.discovering(location: location.displayName))
 
-        // Discovery happens synchronously but is fast (throws on cancellation)
-        var discoveredProjects = try crawler.findProjects(in: locationURL)
-
-        // When scanning multiple locations concurrently, only process paths
-        // this location claims first — overlapping locations discover the same
-        // files and would otherwise race on insert.
-        if let coordinator {
-            let claimed = await coordinator.claim(discoveredProjects.map { $0.alsFilePath.path })
-            discoveredProjects = discoveredProjects.filter { claimed.contains($0.alsFilePath.path) }
-        }
-
-        let total = discoveredProjects.count
-
-        guard total > 0 else {
-            try await database.updateLocationProjectCount(id: location.id, count: 0)
+        // An unreachable root (unmounted drive, deleted folder) is not an empty
+        // library — skip entirely so its records are neither reparsed nor pruned.
+        guard FileManager.default.fileExists(atPath: location.path) else {
             return 0
         }
 
-        // Fetch existing projects to preserve user metadata
-        let alsFilePaths = discoveredProjects.map { $0.alsFilePath.path }
-        let existingProjects = try await database.fetchProjects(byAlsFilePaths: alsFilePaths)
+        // One indexed snapshot of everything under this location: consulted to
+        // skip unchanged files and, after a complete crawl, to prune records
+        // whose files no longer exist.
+        let existingByPath = try await database.fetchProjects(underPath: location.path)
 
-        // Parse in batches to avoid memory pressure
+        // Discovery streams into a bounded pool of parse workers, so parsing
+        // starts with the first discovered file instead of after the full crawl.
+        let (discoveries, continuation) = AsyncStream.makeStream(of: DiscoveredProject.self)
+
+        var discoveredPaths = Set<String>()
         var processed = 0
-        let batchSize = 50
 
-        for batch in stride(from: 0, to: total, by: batchSize) {
-            try Task.checkCancellation()
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            group.addTask {
+                defer { continuation.finish() }
+                try self.crawler.enumerateProjects(in: locationURL) { discovered in
+                    continuation.yield(discovered)
+                }
+            }
 
-            let end = min(batch + batchSize, total)
-            let batchProjects = Array(discoveredProjects[batch..<end])
+            // Dispatcher: consumes discoveries, keeps at most parseConcurrency
+            // parses in flight, and flushes results to the DB in chunks.
+            try await withThrowingTaskGroup(of: ProjectRecord?.self) { parsers in
+                var inFlight = 0
+                var pendingSave: [ProjectRecord] = []
+                var lastProgressUpdate = ContinuousClock.now
+                var lastProjectName = ""
 
-            // Parse batch concurrently, skipping unchanged files
-            let records = await withTaskGroup(of: ProjectRecord?.self) { group in
-                for discovered in batchProjects {
-                    let existing = existingProjects[discovered.alsFilePath.path]
+                func collectOne() async throws {
+                    if let parsed = try await parsers.next() {
+                        inFlight -= 1
+                        processed += 1
+                        if let record = parsed {
+                            pendingSave.append(record)
+                        }
+                        if pendingSave.count >= Self.saveChunkSize {
+                            let chunk = pendingSave
+                            pendingSave = []
+                            try await self.database.saveProjects(chunk)
+                        }
+                        // Throttle progress: at most ~4 updates/second
+                        let now = ContinuousClock.now
+                        if now - lastProgressUpdate > .milliseconds(250) {
+                            lastProgressUpdate = now
+                            progress(.parsing(current: processed, total: discoveredPaths.count, projectName: lastProjectName))
+                        }
+                    }
+                }
+
+                for await discovered in discoveries {
+                    try Task.checkCancellation()
+                    let path = discovered.alsFilePath.path
+                    discoveredPaths.insert(path)
+
+                    // Overlapping locations discover the same files; only the
+                    // location that claims a path first parses it. Unclaimed
+                    // files still count as discovered so pruning ignores them.
+                    if let coordinator {
+                        guard await coordinator.claim([path]).contains(path) else { continue }
+                    }
+
+                    let existing = existingByPath[path]
 
                     // Skip files that haven't changed since last index.
                     // Exception: records flagged with missing samples are re-verified
@@ -169,35 +208,42 @@ nonisolated final class ProjectScanner: Sendable {
                        let existing = existing,
                        !existing.hasMissingSamples,
                        abs(existing.filesystemModifiedDate.timeIntervalSince(discovered.modifiedDate)) < 1.0 {
+                        processed += 1
                         continue
                     }
 
-                    group.addTask {
+                    lastProjectName = discovered.projectName
+                    if inFlight >= Self.parseConcurrency {
+                        try await collectOne()
+                    }
+                    parsers.addTask {
                         self.parseProject(discovered, existing: existing)
                     }
+                    inFlight += 1
                 }
 
-                var results: [ProjectRecord] = []
-                for await record in group {
-                    if let record = record {
-                        results.append(record)
-                    }
+                while inFlight > 0 {
+                    try await collectOne()
                 }
-                return results
+                if !pendingSave.isEmpty {
+                    try await self.database.saveProjects(pendingSave)
+                }
             }
 
-            // Save structured: awaited before the next batch starts, so
-            // cancellation propagates and no save outlives this scope.
-            if !records.isEmpty {
-                try await database.saveProjects(records)
-            }
-
-            processed += batchProjects.count
-            if let lastProject = batchProjects.last {
-                progress(.parsing(current: processed, total: total, projectName: lastProject.projectName))
-            }
+            try await group.waitForAll()
         }
 
+        // The crawl completed without cancellation, so any indexed file we did
+        // not encounter is gone from disk — remove it. (Projects on offline
+        // volumes are protected by the reachability guard above, not here.)
+        let vanished = existingByPath.filter { !discoveredPaths.contains($0.key) }
+        if !vanished.isEmpty {
+            try await database.deleteProjects(ids: vanished.values.map(\.id))
+        }
+
+        if processed > 0 {
+            progress(.parsing(current: processed, total: discoveredPaths.count, projectName: ""))
+        }
         try await database.updateLocationProjectCount(id: location.id, count: processed)
         return processed
     }

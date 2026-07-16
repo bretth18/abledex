@@ -40,14 +40,22 @@ nonisolated struct FileSystemCrawler: Sendable {
         return containsALS
     }
 
-    /// Crawls `directory` for .als project files.
-    /// Throws `CancellationError` if the surrounding task is cancelled mid-crawl.
+    /// Crawls `directory` for .als project files, returning the full list.
+    /// Prefer `enumerateProjects(in:onDiscover:)` for large trees — it lets the
+    /// caller start parsing while the crawl is still running.
     func findProjects(in directory: URL) throws -> [DiscoveredProject] {
         var projects: [DiscoveredProject] = []
+        try enumerateProjects(in: directory) { projects.append($0) }
+        return projects
+    }
+
+    /// Streams discovered .als project files to `onDiscover` as the crawl proceeds.
+    /// Throws `CancellationError` if the surrounding task is cancelled mid-crawl.
+    func enumerateProjects(in directory: URL, onDiscover: (DiscoveredProject) -> Void) throws {
         let fm = FileManager.default
 
         guard fm.fileExists(atPath: directory.path) else {
-            return []
+            return
         }
 
         let resourceKeys: Set<URLResourceKey> = [
@@ -61,7 +69,7 @@ nonisolated struct FileSystemCrawler: Sendable {
             includingPropertiesForKeys: Array(resourceKeys),
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else {
-            return []
+            return
         }
 
         var entryCount = 0
@@ -101,7 +109,7 @@ nonisolated struct FileSystemCrawler: Sendable {
             // Use the .als filename as the project name (without extension)
             let projectName = fileURL.deletingPathExtension().lastPathComponent
 
-            projects.append(DiscoveredProject(
+            onDiscover(DiscoveredProject(
                 folderPath: folderURL,
                 alsFilePath: fileURL,
                 projectName: projectName,
@@ -110,8 +118,6 @@ nonisolated struct FileSystemCrawler: Sendable {
                 modifiedDate: modDate
             ))
         }
-
-        return projects
     }
 
     func findMainALSFile(in projectFolder: URL) -> URL? {
