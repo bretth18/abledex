@@ -8,7 +8,10 @@
 import Foundation
 import GRDB
 
-final class AppDatabase: Sendable {
+// nonisolated: GRDB serializes all access on its own queues; routing these async
+// wrappers through the main actor (the module default) would add a main-thread hop
+// for every batch save the background scanner performs.
+nonisolated final class AppDatabase: Sendable {
     private let dbWriter: any DatabaseWriter
 
     private init(dbWriter: any DatabaseWriter) throws {

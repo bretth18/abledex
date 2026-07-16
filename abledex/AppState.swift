@@ -177,17 +177,20 @@ final class AppState {
             guard !Task.isCancelled else { return }
 
             let projectsSnapshot = self.projects
-            let result = await Task.detached(priority: .utility) {
-                let groups = DuplicateDetectionService().findDuplicates(in: projectsSnapshot)
-                let ids = Set(groups.flatMap { $0.projects.map { $0.id } })
-                return (groups, ids)
-            }.value
+            let result = await Self.computeDuplicates(in: projectsSnapshot)
 
             guard !Task.isCancelled else { return }
             self.cachedDuplicateGroups = result.0
             self.cachedDuplicateProjectIDs = result.1
             self.cachedDuplicatesCount = result.1.count
         }
+    }
+
+    @concurrent
+    private static func computeDuplicates(in projects: [ProjectRecord]) async -> ([DuplicateGroup], Set<UUID>) {
+        let groups = DuplicateDetectionService().findDuplicates(in: projects)
+        let ids = Set(groups.flatMap { $0.projects.map(\.id) })
+        return (groups, ids)
     }
 
     // Table implementation toggle for A/B performance comparison (persisted)
@@ -478,10 +481,8 @@ final class AppState {
             let fetchedLocations = try await database.fetchAllLocations()
             let fetchedCollections = try await database.fetchAllCollections()
 
-            // Compute caches off main thread
-            let caches = await Task.detached(priority: .userInitiated) {
-                self.computeCachesOffMainThread(for: fetchedProjects)
-            }.value
+            // Compute caches off main thread (@concurrent hops to the pool)
+            let caches = await Self.computeCaches(for: fetchedProjects)
 
             guard !Task.isCancelled else { return }
 
@@ -565,7 +566,8 @@ final class AppState {
         var collectionDoneCounts: [UUID: Int]
     }
 
-    private nonisolated func computeCachesOffMainThread(for projects: [ProjectRecord]) -> ComputedCaches {
+    @concurrent
+    private static func computeCaches(for projects: [ProjectRecord]) async -> ComputedCaches {
         var statusCounts: [CompletionStatus: Int] = [:]
         var colorLabelCounts: [ColorLabel: Int] = [:]
         var volumeCounts: [String: Int] = [:]
@@ -668,16 +670,32 @@ final class AppState {
     // MARK: - Scanning
 
     func startScan(forceReparse: Bool = false) async {
+        await runScan { scanner, progress in
+            try await scanner.scanAllLocations(forceReparse: forceReparse, progress: progress)
+        }
+    }
+
+    func startLocationScan(_ location: LocationRecord) async {
+        await runScan { scanner, progress in
+            try await scanner.scanLocation(location, forceReparse: true, progress: progress)
+        }
+    }
+
+    /// Shared scan driver. The scanner's entry points are @concurrent, so awaiting
+    /// them from the main actor runs the crawl/parse work on the concurrent pool;
+    /// the wrapping Task exists only to give Stop Scan a handle to cancel.
+    private func runScan(
+        _ operation: @escaping @Sendable (ProjectScanner, @escaping @Sendable (ScanProgress) -> Void) async throws -> Int
+    ) async {
         guard !isScanning else { return }
         isScanning = true
         scanProgress = .starting
 
-        // Run scan in detached task to avoid blocking MainActor
         let scanner = self.scanner
-        let task = Task.detached(priority: .userInitiated) { () -> Result<Int, Error> in
+        let task = Task { () -> Result<Int, Error> in
             do {
-                let count = try await scanner.scanAllLocations(forceReparse: forceReparse) { progress in
-                    Task { @MainActor [weak self] in
+                let count = try await operation(scanner) { [weak self] progress in
+                    Task { @MainActor in
                         self?.scanProgress = progress
                     }
                 }
@@ -715,31 +733,6 @@ final class AppState {
         isScanning = false
     }
 
-    func startLocationScan(_ location: LocationRecord) async {
-        guard !isScanning else { return }
-        isScanning = true
-        scanProgress = .starting
-
-        let scanner = self.scanner
-        let task = Task.detached(priority: .userInitiated) { () -> Result<Int, Error> in
-            do {
-                let count = try await scanner.scanLocation(location, forceReparse: true) { progress in
-                    Task { @MainActor [weak self] in
-                        self?.scanProgress = progress
-                    }
-                }
-                return .success(count)
-            } catch {
-                return .failure(error)
-            }
-        }
-        cancelScanAction = { task.cancel() }
-        let result = await task.value
-        cancelScanAction = nil
-
-        await finishScan(with: result)
-    }
-
     func rescanProject(_ project: ProjectRecord) async {
         guard !isScanning else { return }
         isScanning = true
@@ -747,7 +740,7 @@ final class AppState {
 
         let scanner = self.scanner
         let alsPath = project.alsFilePath
-        let task = Task.detached(priority: .userInitiated) { () -> Result<ProjectRecord?, Error> in
+        let task = Task { () -> Result<ProjectRecord?, Error> in
             do {
                 let record = try await scanner.scanSingleProject(alsFilePath: alsPath)
                 return .success(record)
@@ -795,17 +788,8 @@ final class AppState {
             scannedCount += 1
             scanProgress = .parsing(current: scannedCount, total: total, projectName: project.name)
 
-            let alsPath = project.alsFilePath
-            let result: Result<ProjectRecord?, Error> = await Task.detached(priority: .userInitiated) {
-                do {
-                    let record = try await scanner.scanSingleProject(alsFilePath: alsPath)
-                    return .success(record)
-                } catch {
-                    return .failure(error)
-                }
-            }.value
-
-            if case .success(let record) = result, let record = record {
+            // scanSingleProject is @concurrent — parsing runs off the main actor.
+            if let record = try? await scanner.scanSingleProject(alsFilePath: project.alsFilePath) {
                 updatedRecords.append(record)
             }
         }

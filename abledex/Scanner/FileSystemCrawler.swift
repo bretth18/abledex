@@ -7,7 +7,7 @@
 
 import Foundation
 
-struct DiscoveredProject: Sendable {
+nonisolated struct DiscoveredProject: Sendable {
     let folderPath: URL
     let alsFilePath: URL
     let projectName: String
@@ -16,7 +16,10 @@ struct DiscoveredProject: Sendable {
     let modifiedDate: Date
 }
 
-struct FileSystemCrawler: Sendable {
+// nonisolated: the crawl must be callable from the scanner's background context.
+// Under this module's MainActor default isolation, an unannotated type would pin
+// the synchronous full-disk enumeration to the main thread.
+nonisolated struct FileSystemCrawler: Sendable {
 
     /// Directory names whose entire subtrees are skipped during crawling.
     /// These never contain a user's main .als files and can hold thousands of entries.

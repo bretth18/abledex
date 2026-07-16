@@ -8,7 +8,7 @@
 import Foundation
 import CryptoKit
 
-enum ScanProgress: Sendable {
+nonisolated enum ScanProgress: Sendable {
     case starting
     case discovering(location: String)
     case parsing(current: Int, total: Int, projectName: String)
@@ -51,14 +51,20 @@ private actor ScanCoordinator {
     }
 }
 
-final class ProjectScanner: Sendable {
+// nonisolated + @concurrent entry points: this module defaults to MainActor
+// isolation, and NonisolatedNonsendingByDefault means a plain nonisolated async
+// function still runs on the CALLER's actor. Scans are always started from the
+// main actor, so without @concurrent the whole scan — including the synchronous
+// filesystem crawl — would execute on the main thread and freeze the UI.
+nonisolated final class ProjectScanner: Sendable {
     private let database: AppDatabase
     private let crawler = FileSystemCrawler()
 
-    nonisolated init(database: AppDatabase) {
+    init(database: AppDatabase) {
         self.database = database
     }
 
+    @concurrent
     func scanAllLocations(
         forceReparse: Bool = false,
         progress: @escaping @Sendable (ScanProgress) -> Void
@@ -98,6 +104,7 @@ final class ProjectScanner: Sendable {
         return totalProjects
     }
 
+    @concurrent
     func scanLocation(
         _ location: LocationRecord,
         forceReparse: Bool = false,
@@ -106,6 +113,7 @@ final class ProjectScanner: Sendable {
         try await scanLocation(location, forceReparse: forceReparse, coordinator: nil, progress: progress)
     }
 
+    @concurrent
     private func scanLocation(
         _ location: LocationRecord,
         forceReparse: Bool,
@@ -194,6 +202,7 @@ final class ProjectScanner: Sendable {
         return processed
     }
 
+    @concurrent
     func scanSingleProject(alsFilePath: String) async throws -> ProjectRecord? {
         let url = URL(fileURLWithPath: alsFilePath)
         let folderURL = url.deletingLastPathComponent()
