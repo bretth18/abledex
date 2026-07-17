@@ -143,6 +143,14 @@ nonisolated final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v7") { db in
+            // File size backs change detection: mtime alone misses content
+            // changes from tools that preserve timestamps (sync/restore).
+            try db.alter(table: "projects") { t in
+                t.add(column: "fileSize", .integer)
+            }
+        }
+
         return migrator
     }
 }

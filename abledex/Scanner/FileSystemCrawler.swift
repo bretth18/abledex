@@ -14,6 +14,7 @@ nonisolated struct DiscoveredProject: Sendable {
     let sourceVolume: String
     let createdDate: Date
     let modifiedDate: Date
+    let fileSize: Int64?
 }
 
 // nonisolated: the crawl must be callable from the scanner's background context.
@@ -61,7 +62,8 @@ nonisolated struct FileSystemCrawler: Sendable {
         let resourceKeys: Set<URLResourceKey> = [
             .isDirectoryKey,
             .contentModificationDateKey,
-            .creationDateKey
+            .creationDateKey,
+            .fileSizeKey
         ]
 
         guard let enumerator = fm.enumerator(
@@ -115,7 +117,8 @@ nonisolated struct FileSystemCrawler: Sendable {
                 projectName: projectName,
                 sourceVolume: volumeName,
                 createdDate: createDate,
-                modifiedDate: modDate
+                modifiedDate: modDate,
+                fileSize: resourceValues?.fileSize.map(Int64.init)
             ))
         }
     }

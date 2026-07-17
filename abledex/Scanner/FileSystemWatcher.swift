@@ -8,19 +8,27 @@
 import Foundation
 import CoreServices
 
-/// Thin FSEvents wrapper: watches location roots and delivers file-level
-/// events (coalesced by `latency`) plus each batch's last event ID so the
-/// caller can persist replay progress.
+/// FSEvents wrapper: one instance watches the locations on ONE volume and
+/// delivers file-level events (coalesced by `latency`) plus each batch's last
+/// event ID so the caller can persist replay progress.
 ///
-/// Starting a stream with a persisted `sinceEventID` replays the filesystem
-/// journal — including changes made while the app wasn't running — through the
-/// same handler as live events. That's what lets launch skip the full crawl.
+/// Two stream flavors:
+/// - `.host` for the boot volume: absolute paths, host-global event IDs.
+/// - `.device` for external volumes: created relative to the device, so event
+///   IDs come from the volume's own journal and stay meaningful across
+///   unmount/remount — and across machines. Callers must validate the journal
+///   UUID (`journalUUID(forDevice:)`) before trusting a persisted ID.
+///
+/// Starting a stream with a persisted `sinceEventID` replays the journal —
+/// including changes made while the app wasn't running or the drive was
+/// mounted elsewhere — through the same handler as live events.
 ///
 /// @unchecked Sendable: `stream` is only mutated by start()/stop() (called from
 /// the main actor); FSEvents delivers callbacks on the private serial queue and
 /// the callback only reads immutable state.
 nonisolated final class FileSystemWatcher: @unchecked Sendable {
     struct Event: Sendable {
+        /// Absolute path (device-relative callback paths are translated).
         let path: String
         let flags: FSEventStreamEventFlags
 
@@ -31,9 +39,33 @@ nonisolated final class FileSystemWatcher: @unchecked Sendable {
         var wasCreated: Bool { flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemCreated) != 0 }
         var wasRemoved: Bool { flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemRemoved) != 0 }
         var wasRenamed: Bool { flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemRenamed) != 0 }
+        /// Volume lifecycle noise — mount/unmount is handled by VolumeMonitor.
+        var isMountOrUnmount: Bool {
+            flags & FSEventStreamEventFlags(kFSEventStreamEventFlagMount | kFSEventStreamEventFlagUnmount) != 0
+        }
     }
 
-    let paths: [String]
+    enum Target: Equatable, Sendable {
+        /// Host-wide stream over absolute paths (boot volume).
+        case host(paths: [String])
+        /// Stream relative to a device; paths are relative to the volume root
+        /// ("" watches the whole volume).
+        case device(device: dev_t, volumeRoot: String, relativePaths: [String])
+    }
+
+    let target: Target
+
+    /// The absolute location paths this watcher covers (identity check for
+    /// "already watching exactly this").
+    var absolutePaths: [String] {
+        switch target {
+        case .host(let paths):
+            return paths
+        case .device(_, let volumeRoot, let relativePaths):
+            return relativePaths.map { $0.isEmpty ? volumeRoot : volumeRoot + "/" + $0 }
+        }
+    }
+
     private let sinceEventID: FSEventStreamEventId
     private let latency: TimeInterval
     private let handler: @Sendable ([Event], FSEventStreamEventId) -> Void
@@ -41,12 +73,12 @@ nonisolated final class FileSystemWatcher: @unchecked Sendable {
     private var stream: FSEventStreamRef?
 
     init(
-        paths: [String],
+        target: Target,
         sinceEventID: FSEventStreamEventId,
         latency: TimeInterval = 2.0,
         handler: @escaping @Sendable ([Event], FSEventStreamEventId) -> Void
     ) {
-        self.paths = paths
+        self.target = target
         self.sinceEventID = sinceEventID
         self.latency = latency
         self.handler = handler
@@ -56,37 +88,59 @@ nonisolated final class FileSystemWatcher: @unchecked Sendable {
         stop()
     }
 
+    /// Identifies the epoch of a volume's FSEvents journal. Persisted event IDs
+    /// are only valid while this matches — a changed UUID means the journal was
+    /// rebuilt and a full rescan of that volume is required. nil when the
+    /// volume has no journal at all (replay impossible).
+    static func journalUUID(forDevice device: dev_t) -> String? {
+        guard let uuid = FSEventsCopyUUIDForDevice(device) else { return nil }
+        return CFUUIDCreateString(kCFAllocatorDefault, uuid) as String?
+    }
+
+    /// The device journal's most recent event ID — a "since now" baseline in
+    /// the device's own ID space.
+    static func lastEventID(forDevice device: dev_t) -> FSEventStreamEventId {
+        FSEventsGetLastEventIdForDeviceBeforeTime(device, CFAbsoluteTimeGetCurrent())
+    }
+
     func start() {
-        guard stream == nil, !paths.isEmpty else { return }
+        guard stream == nil else { return }
 
         var context = FSEventStreamContext()
         context.info = Unmanaged.passUnretained(self).toOpaque()
+        let flags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes)
 
         let callback: FSEventStreamCallback = { _, info, eventCount, eventPaths, eventFlags, eventIDs in
             guard let info, eventCount > 0 else { return }
             let watcher = Unmanaged<FileSystemWatcher>.fromOpaque(info).takeUnretainedValue()
-            guard let paths = Unmanaged<CFArray>.fromOpaque(UnsafeRawPointer(eventPaths))
+            guard let rawPaths = Unmanaged<CFArray>.fromOpaque(UnsafeRawPointer(eventPaths))
                 .takeUnretainedValue() as NSArray as? [String],
-                paths.count == eventCount else { return }
+                rawPaths.count == eventCount else { return }
 
             var events: [Event] = []
             events.reserveCapacity(eventCount)
             for index in 0..<eventCount {
-                events.append(Event(path: paths[index], flags: eventFlags[index]))
+                events.append(Event(path: watcher.absolutePath(for: rawPaths[index]), flags: eventFlags[index]))
             }
             watcher.handler(events, eventIDs[eventCount - 1])
         }
 
-        guard let created = FSEventStreamCreate(
-            kCFAllocatorDefault,
-            callback,
-            &context,
-            paths as CFArray,
-            sinceEventID,
-            latency,
-            FSEventStreamCreateFlags(kFSEventStreamCreateFlagFileEvents | kFSEventStreamCreateFlagUseCFTypes)
-        ) else { return }
+        let created: FSEventStreamRef?
+        switch target {
+        case .host(let paths):
+            guard !paths.isEmpty else { return }
+            created = FSEventStreamCreate(
+                kCFAllocatorDefault, callback, &context,
+                paths as CFArray, sinceEventID, latency, flags
+            )
+        case .device(let device, _, let relativePaths):
+            created = FSEventStreamCreateRelativeToDevice(
+                kCFAllocatorDefault, callback, &context,
+                device, relativePaths as CFArray, sinceEventID, latency, flags
+            )
+        }
 
+        guard let created else { return }
         stream = created
         FSEventStreamSetDispatchQueue(created, queue)
         FSEventStreamStart(created)
@@ -98,5 +152,12 @@ nonisolated final class FileSystemWatcher: @unchecked Sendable {
         FSEventStreamInvalidate(stream)
         FSEventStreamRelease(stream)
         self.stream = nil
+    }
+
+    /// Device streams report paths relative to the volume root.
+    private func absolutePath(for rawPath: String) -> String {
+        guard case .device(_, let volumeRoot, _) = target else { return rawPath }
+        let trimmed = rawPath.hasPrefix("/") ? String(rawPath.dropFirst()) : rawPath
+        return trimmed.isEmpty ? volumeRoot : volumeRoot + "/" + trimmed
     }
 }

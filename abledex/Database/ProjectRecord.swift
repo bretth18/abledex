@@ -139,6 +139,8 @@ struct ProjectRecord: Codable, Sendable, Identifiable, Equatable, FetchableRecor
     // Computed metadata
     var hasMissingSamples: Bool
     var fileHash: String?
+    // .als size in bytes at last index; part of change detection (nil = legacy row)
+    var fileSize: Int64? = nil
 
     // Indexing
     var lastIndexedAt: Date
@@ -178,6 +180,7 @@ struct ProjectRecord: Codable, Sendable, Identifiable, Equatable, FetchableRecor
         case musicalKeysJSON
         case hasMissingSamples
         case fileHash
+        case fileSize
         case lastIndexedAt
         case userTagsJSON
         case userNotes

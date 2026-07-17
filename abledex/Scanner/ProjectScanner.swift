@@ -69,18 +69,27 @@ nonisolated final class ProjectScanner: Sendable {
         forceReparse: Bool = false,
         progress: @escaping @Sendable (ScanProgress) -> Void
     ) async throws -> Int {
+        let locations = try await database.fetchEnabledLocations()
+        return try await scanLocations(locations, forceReparse: forceReparse, progress: progress)
+    }
+
+    /// Scans the given locations in parallel (subset scans let launch index
+    /// only the locations that journal replay can't cover).
+    @concurrent
+    func scanLocations(
+        _ locationsToScan: [LocationRecord],
+        forceReparse: Bool = false,
+        progress: @escaping @Sendable (ScanProgress) -> Void
+    ) async throws -> Int {
         let startTime = Date()
         progress(.starting)
-
-        let locations = try await database.fetchEnabledLocations()
 
         // Dedupes discovered .als paths across concurrently scanned locations
         // in case any locations overlap (e.g. one is nested inside another).
         let coordinator = ScanCoordinator()
 
-        // Scan all locations in parallel
         let totalProjects = try await withThrowingTaskGroup(of: Int.self) { group in
-            for location in locations {
+            for location in locationsToScan {
                 group.addTask {
                     try await self.scanLocation(
                         location,
@@ -200,14 +209,18 @@ nonisolated final class ProjectScanner: Sendable {
 
                     let existing = existingByPath[path]
 
-                    // Skip files that haven't changed since last index.
+                    // Skip files that haven't changed since last index (same mtime
+                    // AND same size — sync/restore tools can preserve timestamps
+                    // while altering content; a nil stored size means a pre-v7 row
+                    // and defers the size check until the next real reparse).
                     // Exception: records flagged with missing samples are re-verified
                     // every scan — earlier detection had false positives, and the user
                     // may have restored the files; either way the flag should self-heal.
                     if !forceReparse,
                        let existing = existing,
                        !existing.hasMissingSamples,
-                       abs(existing.filesystemModifiedDate.timeIntervalSince(discovered.modifiedDate)) < 1.0 {
+                       abs(existing.filesystemModifiedDate.timeIntervalSince(discovered.modifiedDate)) < 1.0,
+                       existing.fileSize == nil || existing.fileSize == discovered.fileSize {
                         processed += 1
                         continue
                     }
@@ -258,6 +271,7 @@ nonisolated final class ProjectScanner: Sendable {
         let attrs = try FileManager.default.attributesOfItem(atPath: alsFilePath)
         let modifiedDate = (attrs[.modificationDate] as? Date) ?? Date()
         let createdDate = (attrs[.creationDate] as? Date) ?? modifiedDate
+        let fileSize = (attrs[.size] as? UInt64).map(Int64.init)
 
         let projectName = url.deletingPathExtension().lastPathComponent
         let sourceVolume = FileSystemCrawler.volumeName(for: url)
@@ -268,7 +282,8 @@ nonisolated final class ProjectScanner: Sendable {
             projectName: projectName,
             sourceVolume: sourceVolume,
             createdDate: createdDate,
-            modifiedDate: modifiedDate
+            modifiedDate: modifiedDate,
+            fileSize: fileSize
         )
 
         let existingProjects = try await database.fetchProjects(byAlsFilePaths: [alsFilePath])
@@ -326,6 +341,7 @@ nonisolated final class ProjectScanner: Sendable {
                 musicalKeysJSON: musicalKeysJSON,
                 hasMissingSamples: hasMissingSamples,
                 fileHash: fileHash,
+                fileSize: discovered.fileSize,
                 lastIndexedAt: Date(),
                 userTagsJSON: existing?.userTagsJSON,
                 userNotes: existing?.userNotes,

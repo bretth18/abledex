@@ -9,6 +9,7 @@ import Foundation
 import SwiftUI
 import CoreServices
 import GRDB
+import os
 
 @MainActor
 @Observable
@@ -588,6 +589,12 @@ final class AppState {
                 for try await fetched in observation.values(in: database.reader) {
                     guard let self else { return }
                     await self.applyObservedProjects(fetched)
+                    // During a scan, saves land every ~50 files; pacing the
+                    // consumer lets GRDB coalesce emissions so the full-table
+                    // refetch runs at most ~2Hz instead of per batch.
+                    if self.isScanning {
+                        try? await Task.sleep(for: .milliseconds(500))
+                    }
                 }
             } catch {
                 guard !Task.isCancelled, let self else { return }
@@ -801,7 +808,7 @@ final class AppState {
     }
 
     func startLocationScan(_ location: LocationRecord, forceReparse: Bool = true) async {
-        await runScan { scanner, progress in
+        await runScan(coveringLocations: [location]) { scanner, progress in
             try await scanner.scanLocation(location, forceReparse: forceReparse, progress: progress)
         }
     }
@@ -809,16 +816,28 @@ final class AppState {
     /// Shared scan driver. The scanner's entry points are @concurrent, so awaiting
     /// them from the main actor runs the crawl/parse work on the concurrent pool;
     /// the wrapping Task exists only to give Stop Scan a handle to cancel.
+    ///
+    /// `coveringLocations` nil means "every enabled location". Volumes whose
+    /// enabled locations are ALL covered by this scan get a fresh replay
+    /// baseline, captured BEFORE crawling so changes that land mid-scan fall
+    /// after the baseline and replay later.
     private func runScan(
+        coveringLocations: [LocationRecord]? = nil,
         _ operation: @escaping @Sendable (ProjectScanner, @escaping @Sendable (ScanProgress) -> Void) async throws -> Int
     ) async {
         guard !isScanning else { return }
         isScanning = true
         scanProgress = .starting
 
-        // Captured BEFORE crawling: filesystem changes that land mid-scan fall
-        // after this ID, so replaying from it on the next launch misses nothing.
-        let eventBaseline = FSEventsGetCurrentEventId()
+        let coveredPaths = coveringLocations.map { Set($0.map(\.path)) }
+        let freshBaselines: [(key: String, target: VolumeWatchTarget, id: FSEventStreamEventId)] =
+            volumeWatchTargets().compactMap { target in
+                let fullyCovered = coveredPaths.map { covered in
+                    target.paths.allSatisfy { covered.contains($0) }
+                } ?? true
+                guard fullyCovered, let baseline = currentBaseline(for: target) else { return nil }
+                return (target.key, target, baseline)
+            }
 
         let scanner = self.scanner
         let task = Task { () -> Result<Int, Error> in
@@ -837,24 +856,29 @@ final class AppState {
         let result = await task.value
         cancelScanAction = nil
 
-        await finishScan(with: result, eventBaseline: eventBaseline)
+        await finishScan(with: result, freshBaselines: freshBaselines)
     }
 
     func cancelScan() {
         cancelScanAction?()
     }
 
-    private func finishScan(with result: Result<Int, Error>, eventBaseline: FSEventStreamEventId) async {
+    private func finishScan(
+        with result: Result<Int, Error>,
+        freshBaselines: [(key: String, target: VolumeWatchTarget, id: FSEventStreamEventId)]
+    ) async {
         // Projects already streamed in via the DB observation during the scan;
         // only the location metadata (counts, last-scanned dates) needs a refresh.
         locations = (try? await database.fetchAllLocations()) ?? locations
 
         switch result {
         case .success:
-            // The index is now consistent as of `eventBaseline` — persist it so
-            // the next launch replays filesystem deltas instead of re-crawling.
-            UserDefaults.standard.set(String(eventBaseline), forKey: Self.fsEventsBaselineKey)
-            ensureFileWatcher(sinceEventID: eventBaseline)
+            // Each fully-covered volume is now consistent as of its baseline —
+            // persist them so future launches/mounts replay deltas, not crawls.
+            for baseline in freshBaselines {
+                persistBaseline(baseline.id, for: baseline.target)
+            }
+            ensureFileWatchers()
         case .failure(let error):
             if error is CancellationError {
                 // Batches saved before cancellation are already in the DB — show them.
@@ -939,74 +963,216 @@ final class AppState {
         let location = LocationRecord.userAdded(path: path, displayName: displayName)
         try await database.saveLocation(location)
         locations.append(location)
-        ensureFileWatcher(sinceEventID: FSEventsGetCurrentEventId())
+        ensureFileWatchers()
     }
 
     func removeLocation(id: UUID) async throws {
         try await database.deleteLocation(id: id)
         locations.removeAll { $0.id == id }
-        ensureFileWatcher(sinceEventID: FSEventsGetCurrentEventId())
+        ensureFileWatchers()
     }
 
     // MARK: - File System Watching (FSEvents)
 
-    private static let fsEventsBaselineKey = "fsEventsLastEventID"
-    private var fileWatcher: FileSystemWatcher?
-    private var pendingFileEvents: [FileSystemWatcher.Event] = []
-    private var fileEventsDrainTask: Task<Void, Never>?
-    private var latestFileEventID: FSEventStreamEventId?
+    private static let watchLog = Logger(subsystem: "computerdata.abledex", category: "filewatch")
 
-    /// Launch-time indexing. When every enabled location was fully indexed
-    /// before and an FSEvents baseline is stored, replay filesystem history
-    /// from that baseline instead of re-crawling — an unchanged library costs
-    /// zero filesystem work at launch. First runs (or new locations) fall back
-    /// to a full scan, which establishes the baseline.
-    func startAutomaticIndexing() async {
-        let defaults = UserDefaults.standard
-        let autoScan = defaults.object(forKey: "autoScanOnLaunch") as? Bool ?? true
-        let storedBaseline = defaults.string(forKey: Self.fsEventsBaselineKey).flatMap { UInt64($0) }
-
-        let enabledLocations = locations.filter(\.isEnabled)
-        let allIndexedBefore = !enabledLocations.isEmpty && enabledLocations.allSatisfy { $0.lastScannedAt != nil }
-
-        if let storedBaseline, allIndexedBefore {
-            // Historical events (including changes made while the app was
-            // closed) replay through the normal event handler. If the journal
-            // can't serve the baseline, events arrive flagged mustScanSubDirs
-            // and trigger a real scan.
-            ensureFileWatcher(sinceEventID: storedBaseline)
-        } else if autoScan {
-            await startScan() // persists a fresh baseline and starts the watcher
-        } else {
-            ensureFileWatcher(sinceEventID: FSEventsGetCurrentEventId())
-        }
-    }
-
-    /// Starts (or re-targets) the FSEvents stream over the enabled, reachable
-    /// location roots. No-op when already watching exactly those paths.
-    private func ensureFileWatcher(sinceEventID: FSEventStreamEventId) {
-        let watchPaths = locations
-            .filter { $0.isEnabled && FileManager.default.fileExists(atPath: $0.path) }
-            .map(\.path)
-            .sorted()
-
-        if let fileWatcher, fileWatcher.paths == watchPaths { return }
-        fileWatcher?.stop()
-        fileWatcher = nil
-        guard !watchPaths.isEmpty else { return }
-
-        let watcher = FileSystemWatcher(paths: watchPaths, sinceEventID: sinceEventID) { [weak self] events, latestEventID in
-            Task { @MainActor [weak self] in
-                self?.enqueueFileEvents(events, latestEventID: latestEventID)
+    /// Traces watcher decisions to the unified log; DEBUG builds also append
+    /// to $TMPDIR/abledex-watch.log so scan/replay behavior can be inspected
+    /// without a console attached.
+    private static func watchTrace(_ message: String) {
+        watchLog.log("\(message, privacy: .public)")
+        #if DEBUG
+        let line = "\(Date()) \(message)\n"
+        if let data = line.data(using: .utf8) {
+            let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("abledex-watch.log")
+            if let handle = try? FileHandle(forWritingTo: url) {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                try? handle.close()
+            } else {
+                try? data.write(to: url)
             }
         }
-        fileWatcher = watcher
-        watcher.start()
+        #endif
     }
 
-    private func enqueueFileEvents(_ events: [FileSystemWatcher.Event], latestEventID: FSEventStreamEventId) {
+    /// One FSEvents stream per volume hosting enabled locations, keyed by a
+    /// stable volume identity ("boot", or the volume UUID for external drives).
+    private var fileWatchers: [String: FileSystemWatcher] = [:]
+    private var pendingFileEvents: [FileSystemWatcher.Event] = []
+    private var fileEventsDrainTask: Task<Void, Never>?
+    private var latestEventIDsByVolume: [String: FSEventStreamEventId] = [:]
+
+    /// A volume with enabled locations on it, resolved to what FSEvents needs.
+    private struct VolumeWatchTarget {
+        let key: String        // persistence key: "boot" or volume UUID
+        let isBoot: Bool
+        let device: dev_t
+        let volumeRoot: String
+        var paths: [String]    // absolute location paths on this volume
+    }
+
+    private func volumeWatchTargets() -> [VolumeWatchTarget] {
+        var targets: [String: VolumeWatchTarget] = [:]
+        for location in locations where location.isEnabled {
+            guard FileManager.default.fileExists(atPath: location.path) else { continue }
+            let url = URL(fileURLWithPath: location.path)
+            guard let values = try? url.resourceValues(forKeys: [.volumeURLKey, .volumeUUIDStringKey]),
+                  let volumeRoot = values.volume?.path else { continue }
+            var status = stat()
+            guard stat(location.path, &status) == 0 else { continue }
+
+            let isBoot = volumeRoot == "/"
+            let key = isBoot ? "boot" : (values.volumeUUIDString ?? volumeRoot)
+            targets[key, default: VolumeWatchTarget(
+                key: key, isBoot: isBoot, device: status.st_dev, volumeRoot: volumeRoot, paths: []
+            )].paths.append(location.path)
+        }
+        return targets.values.map { target in
+            var sorted = target
+            sorted.paths.sort()
+            return sorted
+        }
+    }
+
+    // MARK: Baseline persistence (per volume)
+
+    private func baselineDefaultsKey(_ volumeKey: String) -> String { "fsEventsBaseline.\(volumeKey)" }
+    private func journalDefaultsKey(_ volumeKey: String) -> String { "fsEventsJournal.\(volumeKey)" }
+
+    /// The stored replay baseline for a volume, or nil when replay can't be
+    /// trusted. External volumes additionally require that the volume's
+    /// journal UUID still matches — device event IDs only mean something
+    /// within the journal that issued them (a rebuilt journal, or a different
+    /// physical drive with the same mount name, invalidates them).
+    private func storedBaseline(for target: VolumeWatchTarget) -> FSEventStreamEventId? {
+        let defaults = UserDefaults.standard
+        var stored = defaults.string(forKey: baselineDefaultsKey(target.key)).flatMap { UInt64($0) }
+        if stored == nil, target.isBoot {
+            // Pre-per-volume releases kept a single host-wide key
+            stored = defaults.string(forKey: "fsEventsLastEventID").flatMap { UInt64($0) }
+        }
+        guard let stored else { return nil }
+        if !target.isBoot {
+            guard let journal = FileSystemWatcher.journalUUID(forDevice: target.device),
+                  journal == defaults.string(forKey: journalDefaultsKey(target.key)) else { return nil }
+        }
+        return stored
+    }
+
+    private func persistBaseline(_ id: FSEventStreamEventId, for target: VolumeWatchTarget) {
+        let defaults = UserDefaults.standard
+        defaults.set(String(id), forKey: baselineDefaultsKey(target.key))
+        if !target.isBoot, let journal = FileSystemWatcher.journalUUID(forDevice: target.device) {
+            defaults.set(journal, forKey: journalDefaultsKey(target.key))
+        }
+    }
+
+    /// A fresh "consistent as of now" baseline in the volume's own ID space.
+    /// nil when the device's journal isn't available (yet) — a zero ID must
+    /// never be persisted or used as sinceWhen, or the stream replays the
+    /// volume's entire history.
+    private func currentBaseline(for target: VolumeWatchTarget) -> FSEventStreamEventId? {
+        if target.isBoot { return FSEventsGetCurrentEventId() }
+        let id = FileSystemWatcher.lastEventID(forDevice: target.device)
+        return id > 0 ? id : nil
+    }
+
+    /// FSEvents' device APIs (journal UUID, last event ID) become available
+    /// shortly AFTER the mount notification fires. Poll briefly so replay
+    /// validation doesn't misread "not ready yet" as "no journal".
+    private func waitForJournal(device: dev_t, timeout: Duration = .seconds(3)) async -> String? {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while clock.now < deadline {
+            if let uuid = FileSystemWatcher.journalUUID(forDevice: device) { return uuid }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        return FileSystemWatcher.journalUUID(forDevice: device)
+    }
+
+    // MARK: Watcher lifecycle
+
+    /// Launch-time indexing. Locations whose volume holds a valid replay
+    /// baseline (and that were fully indexed before) are covered by journal
+    /// replay — zero filesystem work when nothing changed. Only the remainder
+    /// gets a real scan.
+    func startAutomaticIndexing() async {
+        let autoScan = UserDefaults.standard.object(forKey: "autoScanOnLaunch") as? Bool ?? true
+        let targets = volumeWatchTargets()
+
+        var volumeKeyByPath: [String: String] = [:]
+        for target in targets {
+            for path in target.paths { volumeKeyByPath[path] = target.key }
+        }
+        let replayableKeys = Set(targets.filter { storedBaseline(for: $0) != nil }.map(\.key))
+
+        let needingScan = locations.filter { location in
+            guard location.isEnabled, let key = volumeKeyByPath[location.path] else { return false }
+            return location.lastScannedAt == nil || !replayableKeys.contains(key)
+        }
+
+        if needingScan.isEmpty || !autoScan {
+            ensureFileWatchers()
+        } else {
+            await runScan(coveringLocations: needingScan) { scanner, progress in
+                try await scanner.scanLocations(needingScan, forceReparse: false, progress: progress)
+            }
+        }
+    }
+
+    /// (Re)starts one FSEvents stream per volume with enabled locations —
+    /// resuming from the stored baseline when valid (which replays history),
+    /// else watching from now. No-op for volumes already watched correctly;
+    /// streams for volumes that vanished (unmounts, removed locations) stop.
+    private func ensureFileWatchers() {
+        let targets = volumeWatchTargets()
+        let activeKeys = Set(targets.map(\.key))
+
+        for (key, watcher) in fileWatchers where !activeKeys.contains(key) {
+            watcher.stop()
+            fileWatchers[key] = nil
+        }
+
+        for target in targets {
+            if let existing = fileWatchers[target.key], existing.absolutePaths == target.paths { continue }
+            fileWatchers[target.key]?.stop()
+
+            let sinceID = storedBaseline(for: target)
+                ?? currentBaseline(for: target)
+                ?? FSEventStreamEventId(kFSEventStreamEventIdSinceNow)
+            let streamTarget: FileSystemWatcher.Target = target.isBoot
+                ? .host(paths: target.paths)
+                : .device(
+                    device: target.device,
+                    volumeRoot: target.volumeRoot,
+                    relativePaths: target.paths.map { Self.relativePath($0, toVolumeRoot: target.volumeRoot) }
+                )
+
+            let volumeKey = target.key
+            let watcher = FileSystemWatcher(target: streamTarget, sinceEventID: sinceID) { [weak self] events, latestEventID in
+                Task { @MainActor [weak self] in
+                    self?.enqueueFileEvents(events, latestEventID: latestEventID, volumeKey: volumeKey)
+                }
+            }
+            fileWatchers[target.key] = watcher
+            watcher.start()
+        }
+    }
+
+    private static func relativePath(_ path: String, toVolumeRoot root: String) -> String {
+        guard path != root else { return "" }
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        return path.hasPrefix(prefix) ? String(path.dropFirst(prefix.count)) : path
+    }
+
+    private func enqueueFileEvents(
+        _ events: [FileSystemWatcher.Event],
+        latestEventID: FSEventStreamEventId,
+        volumeKey: String
+    ) {
         pendingFileEvents.append(contentsOf: events)
-        latestFileEventID = latestEventID
+        latestEventIDsByVolume[volumeKey] = latestEventID
         guard fileEventsDrainTask == nil else { return }
         fileEventsDrainTask = Task { @MainActor in
             // Extra coalescing on top of the stream latency: Live touches
@@ -1018,9 +1184,18 @@ final class AppState {
                 await processFileEvents(batch)
             }
             fileEventsDrainTask = nil
-            // The index has caught up with the filesystem as of the last event.
-            if let latest = latestFileEventID {
-                UserDefaults.standard.set(String(latest), forKey: Self.fsEventsBaselineKey)
+            // The index has caught up with each volume as of its last event.
+            // Never move a baseline backward: replayed (historical) events
+            // carry IDs older than a baseline a scan persisted mid-drain, and
+            // regressing would re-deliver the same events on every remount.
+            let caughtUp = latestEventIDsByVolume
+            latestEventIDsByVolume.removeAll()
+            let defaults = UserDefaults.standard
+            for (key, id) in caughtUp {
+                let stored = defaults.string(forKey: baselineDefaultsKey(key)).flatMap { UInt64($0) } ?? 0
+                if id > stored {
+                    defaults.set(String(id), forKey: baselineDefaultsKey(key))
+                }
             }
         }
     }
@@ -1030,17 +1205,32 @@ final class AppState {
     /// drop their record; directory-level changes (moves, deletions, journal
     /// gaps) trigger an incremental scan, whose pruning handles folder removals.
     private func processFileEvents(_ events: [FileSystemWatcher.Event]) async {
-        var needsLocationScan = false
+        var locationIDsToScan = Set<UUID>()
         var alsToRescan: [String] = []
         var alsToDelete: [String] = []
         var seenPaths = Set<String>()
 
+        func markContainingLocations(of path: String) {
+            for location in locations where location.isEnabled {
+                if path == location.path || path.hasPrefix(location.path + "/") {
+                    locationIDsToScan.insert(location.id)
+                }
+            }
+        }
+
         for event in events {
             let path = event.path
             guard seenPaths.insert(path).inserted else { continue }
+            Self.watchTrace("event \(String(format: "0x%08x", event.flags)) \(path)")
 
+            // Volume lifecycle is VolumeMonitor's job; hidden-path churn
+            // (.fseventsd, .Spotlight-V100, .Trashes, .DS_Store) accompanies
+            // every mount and is invisible to the crawler anyway.
+            if event.isMountOrUnmount || path.contains("/.") {
+                continue
+            }
             if event.mustScanSubDirs {
-                needsLocationScan = true
+                markContainingLocations(of: path)
                 continue
             }
             // Live's own churn on every save — never affects the index
@@ -1055,8 +1245,9 @@ final class AppState {
                 }
             } else if event.isDirectory, event.wasCreated || event.wasRemoved || event.wasRenamed {
                 // Folder moves deliver no per-file events — only a scan can
-                // discover (or prune) the projects inside.
-                needsLocationScan = true
+                // discover (or prune) the projects inside. Scan just the
+                // locations the folder belongs to, not the whole library.
+                markContainingLocations(of: path)
             }
         }
 
@@ -1068,8 +1259,11 @@ final class AppState {
             // Saves stream into the UI via the DB observation.
             _ = try? await scanner.scanSingleProject(alsFilePath: path)
         }
-        if needsLocationScan, !isScanning {
-            await startScan()
+        if !locationIDsToScan.isEmpty, !isScanning {
+            let affected = locations.filter { locationIDsToScan.contains($0.id) }
+            await runScan(coveringLocations: affected) { scanner, progress in
+                try await scanner.scanLocations(affected, forceReparse: false, progress: progress)
+            }
         }
     }
 
@@ -1147,12 +1341,25 @@ final class AppState {
         mountsBeingHandled.insert(url.path)
         defer { mountsBeingHandled.remove(url.path) }
 
-        // Scan only the mounted volume's location — the drive may hold changes
-        // made while offline (or on another machine), but the rest of the
-        // library is covered by the FSEvents watcher.
         if let existingLocation = try? await database.fetchLocation(byPath: url.path) {
             guard existingLocation.isEnabled else { return }
-            await startLocationScan(existingLocation, forceReparse: false)
+            // FSEvents needs a moment to open the just-mounted volume's journal;
+            // deciding before it's ready misreads every mount as "no journal".
+            var mountStat = stat()
+            if stat(url.path, &mountStat) == 0 {
+                _ = await waitForJournal(device: mountStat.st_dev)
+            }
+            // Gold path: the volume's own journal (validated by its UUID)
+            // replays everything that changed since it was last indexed —
+            // even changes made on another machine — with no crawl at all.
+            let target = volumeWatchTargets().first { $0.paths.contains(existingLocation.path) }
+            if existingLocation.lastScannedAt != nil, let target, storedBaseline(for: target) != nil {
+                Self.watchTrace("mount \(name): replaying journal, no scan")
+                ensureFileWatchers()
+            } else {
+                Self.watchTrace("mount \(name): no valid baseline (target: \(target != nil), scanned: \(existingLocation.lastScannedAt != nil)) — scanning")
+                await startLocationScan(existingLocation, forceReparse: false)
+            }
         } else {
             let location = LocationRecord.autoDetected(path: url.path, displayName: name)
             do {
@@ -1172,6 +1379,9 @@ final class AppState {
         if volumeCounts.keys.contains(name) {
             offlineVolumeNames.insert(name)
         }
+        // Stop the volume's stream; its replay baseline stays persisted so the
+        // next mount resumes from the journal instead of rescanning.
+        ensureFileWatchers()
     }
 
     // MARK: - Incremental Updates
