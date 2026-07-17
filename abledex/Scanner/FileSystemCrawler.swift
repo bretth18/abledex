@@ -7,16 +7,19 @@
 
 import Foundation
 
-struct DiscoveredProject: Sendable {
+nonisolated struct DiscoveredProject: Sendable {
     let folderPath: URL
     let alsFilePath: URL
     let projectName: String
     let sourceVolume: String
     let createdDate: Date
     let modifiedDate: Date
+    let fileSize: Int64?
 }
 
-struct FileSystemCrawler: Sendable {
+// nonisolated: under the module's MainActor default isolation, an unannotated
+// type would pin the synchronous crawl to the main thread.
+nonisolated struct FileSystemCrawler: Sendable {
 
     /// Directory names whose entire subtrees are skipped during crawling.
     /// These never contain a user's main .als files and can hold thousands of entries.
@@ -37,20 +40,28 @@ struct FileSystemCrawler: Sendable {
         return containsALS
     }
 
-    /// Crawls `directory` for .als project files.
-    /// Throws `CancellationError` if the surrounding task is cancelled mid-crawl.
+    /// Crawls `directory` for .als project files. Prefer the streaming
+    /// `enumerateProjects(in:onDiscover:)` for large trees.
     func findProjects(in directory: URL) throws -> [DiscoveredProject] {
         var projects: [DiscoveredProject] = []
+        try enumerateProjects(in: directory) { projects.append($0) }
+        return projects
+    }
+
+    /// Streams discovered .als project files to `onDiscover` as the crawl proceeds.
+    /// Throws `CancellationError` if the surrounding task is cancelled mid-crawl.
+    func enumerateProjects(in directory: URL, onDiscover: (DiscoveredProject) -> Void) throws {
         let fm = FileManager.default
 
         guard fm.fileExists(atPath: directory.path) else {
-            return []
+            return
         }
 
         let resourceKeys: Set<URLResourceKey> = [
             .isDirectoryKey,
             .contentModificationDateKey,
-            .creationDateKey
+            .creationDateKey,
+            .fileSizeKey
         ]
 
         guard let enumerator = fm.enumerator(
@@ -58,7 +69,7 @@ struct FileSystemCrawler: Sendable {
             includingPropertiesForKeys: Array(resourceKeys),
             options: [.skipsHiddenFiles, .skipsPackageDescendants]
         ) else {
-            return []
+            return
         }
 
         var entryCount = 0
@@ -98,17 +109,16 @@ struct FileSystemCrawler: Sendable {
             // Use the .als filename as the project name (without extension)
             let projectName = fileURL.deletingPathExtension().lastPathComponent
 
-            projects.append(DiscoveredProject(
+            onDiscover(DiscoveredProject(
                 folderPath: folderURL,
                 alsFilePath: fileURL,
                 projectName: projectName,
                 sourceVolume: volumeName,
                 createdDate: createDate,
-                modifiedDate: modDate
+                modifiedDate: modDate,
+                fileSize: resourceValues?.fileSize.map(Int64.init)
             ))
         }
-
-        return projects
     }
 
     func findMainALSFile(in projectFolder: URL) -> URL? {

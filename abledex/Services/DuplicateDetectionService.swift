@@ -55,9 +55,11 @@ struct DuplicateDetectionService: Sendable {
             .map { DuplicateGroup(type: .exact, projects: $0) }
     }
 
-    /// Find projects with similar characteristics
+    /// Find projects with similar characteristics. Similarity requires BPM
+    /// within ±5, so candidates bucket by integer BPM and compare only against
+    /// neighboring buckets — near-linear instead of all-pairs O(n²).
     private func findSimilarProjects(in projects: [ProjectRecord]) -> [DuplicateGroup] {
-        // Pre-decode all plugin sets once to avoid repeated JSON decoding + lock contention in O(n²) loop
+        // Pre-decode all plugin sets once to avoid repeated JSON decoding + lock contention
         var pluginSetsById: [UUID: Set<String>] = [:]
         pluginSetsById.reserveCapacity(projects.count)
         for project in projects {
@@ -67,22 +69,32 @@ struct DuplicateDetectionService: Sendable {
             }
         }
 
+        // Similarity needs a BPM and plugins
+        let candidates = projects.filter { $0.bpm != nil && pluginSetsById[$0.id] != nil }
+
+        var buckets: [Int: [Int]] = [:]  // integer bpm -> indexes into candidates
+        for (index, project) in candidates.enumerated() {
+            buckets[Int(project.bpm!), default: []].append(index)
+        }
+
         var groups: [DuplicateGroup] = []
         var processed = Set<UUID>()
 
-        for project in projects {
+        for (index, project) in candidates.enumerated() {
             guard !processed.contains(project.id) else { continue }
-            guard project.bpm != nil else { continue }
 
             var similar: [ProjectRecord] = [project]
+            let bucket = Int(project.bpm!)
 
-            for other in projects {
-                guard other.id != project.id else { continue }
-                guard !processed.contains(other.id) else { continue }
+            for neighborBucket in (bucket - 5)...(bucket + 5) {
+                for otherIndex in buckets[neighborBucket] ?? [] {
+                    let other = candidates[otherIndex]
+                    guard otherIndex != index, !processed.contains(other.id) else { continue }
 
-                if isSimilarFast(project, other, pluginsA: pluginSetsById[project.id], pluginsB: pluginSetsById[other.id]) {
-                    similar.append(other)
-                    processed.insert(other.id)
+                    if isSimilarFast(project, other, pluginsA: pluginSetsById[project.id], pluginsB: pluginSetsById[other.id]) {
+                        similar.append(other)
+                        processed.insert(other.id)
+                    }
                 }
             }
 

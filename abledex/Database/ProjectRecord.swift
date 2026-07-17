@@ -97,7 +97,7 @@ enum ColorLabel: Int, Codable, Sendable, CaseIterable {
     }
 }
 
-struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, PersistableRecord {
+struct ProjectRecord: Codable, Sendable, Identifiable, Equatable, FetchableRecord, PersistableRecord {
     static let databaseTableName = "projects"
 
     var id: UUID
@@ -139,6 +139,8 @@ struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, Persista
     // Computed metadata
     var hasMissingSamples: Bool
     var fileHash: String?
+    // .als size in bytes at last index; part of change detection (nil = legacy row)
+    var fileSize: Int64? = nil
 
     // Indexing
     var lastIndexedAt: Date
@@ -178,6 +180,7 @@ struct ProjectRecord: Codable, Sendable, Identifiable, FetchableRecord, Persista
         case musicalKeysJSON
         case hasMissingSamples
         case fileHash
+        case fileSize
         case lastIndexedAt
         case userTagsJSON
         case userNotes

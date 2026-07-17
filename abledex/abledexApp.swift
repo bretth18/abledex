@@ -51,9 +51,7 @@ struct AbledexApp: App {
                     await appState.loadData()
                     appState.startVolumeMonitoring()
 
-                    if UserDefaults.standard.object(forKey: "autoScanOnLaunch") as? Bool ?? true {
-                        await appState.startScan()
-                    }
+                    await appState.startAutomaticIndexing()
                 }
         }
         .commands {

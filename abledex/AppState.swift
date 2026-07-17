@@ -7,6 +7,9 @@
 
 import Foundation
 import SwiftUI
+import CoreServices
+import GRDB
+import os
 
 @MainActor
 @Observable
@@ -23,6 +26,8 @@ final class AppState {
 
     var projects: [ProjectRecord] = [] {
         didSet {
+            // Invalidates observation emissions computed against the old state
+            projectsMutationGeneration &+= 1
             // Skip if this is the initial load or batch update in progress
             guard !isInitialLoad, !isBatchUpdating else { return }
             recomputeCachedCounts()
@@ -31,6 +36,7 @@ final class AppState {
     }
     private var isInitialLoad = true
     private var isBatchUpdating = false
+    private var projectsMutationGeneration = 0
     var locations: [LocationRecord] = []
     var collections: [CollectionRecord] = []
     var selectedProjectIDs: Set<UUID> = [] {
@@ -65,15 +71,32 @@ final class AppState {
 
     var searchQuery: String = "" {
         didSet {
-            // Debounce search to avoid filtering on every keystroke
+            // Debounce, then resolve matches via the FTS5 index
             searchDebounceTask?.cancel()
             searchDebounceTask = Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(150))
                 if !Task.isCancelled {
-                    recomputeFilteredProjects()
+                    await resolveSearchMatches()
                 }
             }
         }
+    }
+
+    /// FTS matches for the current search; nil = empty query or untokenizable
+    /// (the filter falls back to substring matching).
+    private var searchMatchIDs: Set<UUID>?
+
+    private func resolveSearchMatches() async {
+        let query = searchQuery
+        guard !query.isEmpty else {
+            searchMatchIDs = nil
+            recomputeFilteredProjects()
+            return
+        }
+        let matches = (try? await database.searchProjectIDs(matching: query)) ?? nil
+        guard query == searchQuery else { return } // superseded
+        searchMatchIDs = matches
+        recomputeFilteredProjects()
     }
 
     // MARK: - Cached Data (for sidebar performance)
@@ -177,17 +200,20 @@ final class AppState {
             guard !Task.isCancelled else { return }
 
             let projectsSnapshot = self.projects
-            let result = await Task.detached(priority: .utility) {
-                let groups = DuplicateDetectionService().findDuplicates(in: projectsSnapshot)
-                let ids = Set(groups.flatMap { $0.projects.map { $0.id } })
-                return (groups, ids)
-            }.value
+            let result = await Self.computeDuplicates(in: projectsSnapshot)
 
             guard !Task.isCancelled else { return }
             self.cachedDuplicateGroups = result.0
             self.cachedDuplicateProjectIDs = result.1
             self.cachedDuplicatesCount = result.1.count
         }
+    }
+
+    @concurrent
+    private static func computeDuplicates(in projects: [ProjectRecord]) async -> ([DuplicateGroup], Set<UUID>) {
+        let groups = DuplicateDetectionService().findDuplicates(in: projects)
+        let ids = Set(groups.flatMap { $0.projects.map(\.id) })
+        return (groups, ids)
     }
 
     // Table implementation toggle for A/B performance comparison (persisted)
@@ -236,22 +262,91 @@ final class AppState {
         cachedFilteredProjects
     }
 
+    /// Everything the filter/sort pass reads, snapshotted so it can run off
+    /// the main actor (filter+sort of a large library takes tens of ms).
+    private struct FilterSnapshot: Sendable {
+        var projects: [ProjectRecord]
+        var searchQuery: String
+        var searchMatchIDs: Set<UUID>?
+        var selectedFilter: ProjectFilter
+        var selectedVolumeFilter: String?
+        var selectedStatusFilter: CompletionStatus?
+        var selectedColorLabelFilter: ColorLabel?
+        var selectedTagFilter: String?
+        var selectedPluginFilter: String?
+        var selectedKeyFilter: String?
+        var selectedFolderFilter: String?
+        var selectedCollectionFilter: UUID?
+        var showFavoritesOnly: Bool
+        var showDuplicatesOnly: Bool
+        var duplicateProjectIDs: Set<UUID>
+        var sortColumn: SortColumn
+        var sortAscending: Bool
+    }
+
+    private var filterGeneration = 0
+    private var filterRecomputeTask: Task<Void, Never>?
+
     private func recomputeFilteredProjects() {
         guard !isBatchUpdating else { return }
-        var result = projects
+        filterGeneration &+= 1
+        let generation = filterGeneration
+        let snapshot = FilterSnapshot(
+            projects: projects,
+            searchQuery: searchQuery,
+            searchMatchIDs: searchMatchIDs,
+            selectedFilter: selectedFilter,
+            selectedVolumeFilter: selectedVolumeFilter,
+            selectedStatusFilter: selectedStatusFilter,
+            selectedColorLabelFilter: selectedColorLabelFilter,
+            selectedTagFilter: selectedTagFilter,
+            selectedPluginFilter: selectedPluginFilter,
+            selectedKeyFilter: selectedKeyFilter,
+            selectedFolderFilter: selectedFolderFilter,
+            selectedCollectionFilter: selectedCollectionFilter,
+            showFavoritesOnly: showFavoritesOnly,
+            showDuplicatesOnly: showDuplicatesOnly,
+            duplicateProjectIDs: cachedDuplicateProjectIDs,
+            sortColumn: sortColumn,
+            sortAscending: sortAscending
+        )
+        filterRecomputeTask?.cancel()
+        filterRecomputeTask = Task { [weak self] in
+            let result = await Self.computeFilteredProjects(snapshot)
+            guard let self, !Task.isCancelled, generation == self.filterGeneration else { return }
+            self.applyFilteredProjects(result)
+        }
+    }
 
-        // Apply search filter (includes name, plugins, and tags)
-        if !searchQuery.isEmpty {
-            let query = searchQuery.lowercased()
-            result = result.filter { project in
-                project.name.lowercased().contains(query) ||
-                project.plugins.contains { $0.lowercased().contains(query) } ||
-                project.userTags.contains { $0.lowercased().contains(query) }
+    /// Prunes selection to visible rows — otherwise the batch toolbar, detail
+    /// pane, and Delete key keep acting on projects the user can't see.
+    private func applyFilteredProjects(_ result: [ProjectRecord]) {
+        cachedFilteredProjects = result
+        let visibleIDs = Set(result.map(\.id))
+        if !selectedProjectIDs.isSubset(of: visibleIDs) {
+            selectedProjectIDs = selectedProjectIDs.intersection(visibleIDs)
+        }
+    }
+
+    @concurrent
+    private static func computeFilteredProjects(_ snapshot: FilterSnapshot) async -> [ProjectRecord] {
+        var result = snapshot.projects
+
+        if !snapshot.searchQuery.isEmpty {
+            if let matchIDs = snapshot.searchMatchIDs {
+                result = result.filter { matchIDs.contains($0.id) }
+            } else {
+                let query = snapshot.searchQuery.lowercased()
+                result = result.filter { project in
+                    project.name.lowercased().contains(query) ||
+                    project.plugins.contains { $0.lowercased().contains(query) } ||
+                    project.userTags.contains { $0.lowercased().contains(query) }
+                }
             }
         }
 
         // Apply category filter
-        switch selectedFilter {
+        switch snapshot.selectedFilter {
         case .all:
             break
         case .favorites:
@@ -272,61 +367,41 @@ final class AppState {
             result = result.filter { ($0.bpm ?? 999) < 100 }
         }
 
-        // Apply volume filter
-        if let volumeFilter = selectedVolumeFilter {
+        if let volumeFilter = snapshot.selectedVolumeFilter {
             result = result.filter { $0.sourceVolume == volumeFilter }
         }
-
-        // Apply status filter
-        if let statusFilter = selectedStatusFilter {
+        if let statusFilter = snapshot.selectedStatusFilter {
             result = result.filter { $0.completionStatus == statusFilter }
         }
-
-        // Apply color label filter
-        if let colorLabelFilter = selectedColorLabelFilter {
+        if let colorLabelFilter = snapshot.selectedColorLabelFilter {
             result = result.filter { $0.colorLabel == colorLabelFilter }
         }
-
-        // Apply tag filter
-        if let tagFilter = selectedTagFilter {
+        if let tagFilter = snapshot.selectedTagFilter {
             result = result.filter { $0.userTags.contains(tagFilter) }
         }
-
-        // Apply plugin filter
-        if let pluginFilter = selectedPluginFilter {
+        if let pluginFilter = snapshot.selectedPluginFilter {
             result = result.filter { $0.plugins.contains(pluginFilter) }
         }
-
-        // Apply key filter
-        if let keyFilter = selectedKeyFilter {
+        if let keyFilter = snapshot.selectedKeyFilter {
             result = result.filter { $0.musicalKeys.contains(keyFilter) }
         }
-
-        // Apply folder filter
-        if let folderFilter = selectedFolderFilter {
+        if let folderFilter = snapshot.selectedFolderFilter {
             result = result.filter { $0.projectFolderName == folderFilter }
         }
-
-        // Apply music-project (collection) filter
-        if let collectionFilter = selectedCollectionFilter {
+        if let collectionFilter = snapshot.selectedCollectionFilter {
             result = result.filter { $0.collectionID == collectionFilter }
         }
-
-        // Apply favorites filter
-        if showFavoritesOnly {
+        if snapshot.showFavoritesOnly {
             result = result.filter { $0.isFavorite }
         }
-
-        // Apply duplicates filter
-        if showDuplicatesOnly {
-            let projectsWithDuplicates = Set(duplicateGroups.flatMap { $0.projects.map { $0.id } })
-            result = result.filter { projectsWithDuplicates.contains($0.id) }
+        if snapshot.showDuplicatesOnly {
+            result = result.filter { snapshot.duplicateProjectIDs.contains($0.id) }
         }
 
         // Apply sorting
         result.sort { a, b in
             let comparison: Bool
-            switch sortColumn {
+            switch snapshot.sortColumn {
             case .name:
                 comparison = a.name.localizedCompare(b.name) == .orderedAscending
             case .bpm:
@@ -346,17 +421,10 @@ final class AppState {
             case .lastOpened:
                 comparison = (a.lastOpenedAt ?? .distantPast) < (b.lastOpenedAt ?? .distantPast)
             }
-            return sortAscending ? comparison : !comparison
+            return snapshot.sortAscending ? comparison : !comparison
         }
 
-        cachedFilteredProjects = result
-
-        // Prune selection to visible rows — otherwise the batch toolbar counts,
-        // detail pane, and Delete key keep acting on projects the user can't see.
-        let visibleIDs = Set(result.map(\.id))
-        if !selectedProjectIDs.isSubset(of: visibleIDs) {
-            selectedProjectIDs = selectedProjectIDs.intersection(visibleIDs)
-        }
+        return result
     }
 
     /// True when any filter or search narrows the visible projects (sort excluded).
@@ -460,77 +528,125 @@ final class AppState {
 
     // MARK: - Data Loading
 
-    private var loadTask: Task<Void, Never>?
-
+    /// Loads locations/collections and starts the projects observation. The
+    /// projects table is never manually re-fetched — the observation streams
+    /// every committed change, including each batch a running scan saves.
     func loadData() async {
-        // Coalesce overlapping loads: cancel the in-flight one so a slow, stale
-        // fetch can't overwrite newer state after a faster reload.
-        loadTask?.cancel()
-        let task = Task { await performLoad() }
-        loadTask = task
-        await task.value
-    }
-
-    private func performLoad() async {
         do {
-            // Fetch from database (off main thread via async)
-            let fetchedProjects = try await database.fetchAllProjects()
-            let fetchedLocations = try await database.fetchAllLocations()
-            let fetchedCollections = try await database.fetchAllCollections()
-
-            // Compute caches off main thread
-            let caches = await Task.detached(priority: .userInitiated) {
-                self.computeCachesOffMainThread(for: fetchedProjects)
-            }.value
-
-            guard !Task.isCancelled else { return }
-
-            // Apply to state (on main thread, but just assignments)
-            locations = fetchedLocations
-            collections = fetchedCollections
-            collectionCounts = caches.collectionCounts
-            collectionDoneCounts = caches.collectionDoneCounts
-            statusCounts = caches.statusCounts
-            colorLabelCounts = caches.colorLabelCounts
-            volumeCounts = caches.volumeCounts
-            tagCounts = caches.tagCounts
-            pluginCounts = caches.pluginCounts
-            keyCounts = caches.keyCounts
-            folderCounts = caches.folderCounts
-            cachedUniqueVolumes = caches.uniqueVolumes
-            cachedUniqueTags = caches.uniqueTags
-            cachedUniquePlugins = caches.uniquePlugins
-            cachedUniqueKeys = caches.uniqueKeys
-            cachedUniqueFolders = caches.uniqueFolders
-            cachedFoldersWithMultipleVersions = caches.foldersWithMultipleVersions
-            cachedProjectsByFolder = caches.projectsByFolder
-            cachedFilteredProjects = caches.filteredProjects
-            cachedDuplicateGroups = caches.duplicateGroups
-            cachedDuplicatesCount = caches.duplicatesCount
-            cachedDuplicateProjectIDs = caches.duplicateProjectIDs
-            offlineVolumeNames = caches.offlineVolumes
-
-            // Set projects with didSet suppressed — the caches above were already
-            // computed off the main thread; re-running the didSet recompute here
-            // would redo all of it synchronously on the main actor.
-            isBatchUpdating = true
-            projects = fetchedProjects
-            isBatchUpdating = false
-            isInitialLoad = false
-
-            // The precomputed filtered list assumes default sort and no filters.
-            if hasNonDefaultFilterOrSort {
-                recomputeFilteredProjects()
-            }
-
+            locations = try await database.fetchAllLocations()
+            collections = try await database.fetchAllCollections()
+            await removeJunkAutoDetectedLocations()
             if locations.isEmpty {
                 await initializeDefaultLocations()
             }
         } catch {
-            if !Task.isCancelled {
-                reportError("Failed to Load Library", error)
+            reportError("Failed to Load Library", error)
+        }
+        startObservingProjects()
+    }
+
+    /// Earlier releases auto-added simulator disk images and cryptex mounts as
+    /// locations — enormous trees that never contain projects.
+    private func removeJunkAutoDetectedLocations() async {
+        let junkPrefixes = [
+            "/Library/Developer/CoreSimulator",
+            "/private/var/run/com.apple.security.cryptexd"
+        ]
+        let junk = locations.filter { location in
+            location.isAutoDetected && junkPrefixes.contains { location.path.hasPrefix($0) }
+        }
+        guard !junk.isEmpty else { return }
+        for location in junk {
+            try? await database.deleteLocation(id: location.id)
+        }
+        let junkIDs = Set(junk.map(\.id))
+        locations.removeAll { junkIDs.contains($0.id) }
+    }
+
+    private var projectsObservationTask: Task<Void, Never>?
+
+    private func startObservingProjects() {
+        guard projectsObservationTask == nil else { return }
+        let database = self.database
+        projectsObservationTask = Task { [weak self] in
+            let observation = ValueObservation.tracking { db in
+                try ProjectRecord.fetchAll(db)
+            }
+            do {
+                // Fetch + decode run on GRDB's reader queue, never the main actor
+                for try await fetched in observation.values(in: database.reader) {
+                    guard let self else { return }
+                    await self.applyObservedProjects(fetched)
+                    // Pacing the consumer during scans lets GRDB coalesce
+                    // emissions instead of refetching per save batch
+                    if self.isScanning {
+                        try? await Task.sleep(for: .milliseconds(500))
+                    }
+                }
+            } catch {
+                guard !Task.isCancelled, let self else { return }
+                self.reportError("Library Sync Failed", error)
             }
         }
+    }
+
+    /// Applies a projects-table emission: derived caches compute off the main
+    /// actor, then everything installs in one synchronous pass. Emissions that
+    /// merely reconcile an optimistic in-memory update compare equal and are
+    /// dropped, keeping single-record edits on their cheap delta path.
+    private func applyObservedProjects(_ fetched: [ProjectRecord]) async {
+        let generation = projectsMutationGeneration
+        guard let caches = await Self.prepareObservedUpdate(fetched: fetched, current: projects) else {
+            isInitialLoad = false
+            return
+        }
+        // State moved while computing — a fresher emission is already queued
+        guard generation == projectsMutationGeneration else { return }
+
+        collectionCounts = caches.collectionCounts
+        collectionDoneCounts = caches.collectionDoneCounts
+        statusCounts = caches.statusCounts
+        colorLabelCounts = caches.colorLabelCounts
+        volumeCounts = caches.volumeCounts
+        tagCounts = caches.tagCounts
+        pluginCounts = caches.pluginCounts
+        keyCounts = caches.keyCounts
+        folderCounts = caches.folderCounts
+        cachedUniqueVolumes = caches.uniqueVolumes
+        cachedUniqueTags = caches.uniqueTags
+        cachedUniquePlugins = caches.uniquePlugins
+        cachedUniqueKeys = caches.uniqueKeys
+        cachedUniqueFolders = caches.uniqueFolders
+        cachedFoldersWithMultipleVersions = caches.foldersWithMultipleVersions
+        cachedProjectsByFolder = caches.projectsByFolder
+        cachedDuplicateGroups = caches.duplicateGroups
+        cachedDuplicatesCount = caches.duplicatesCount
+        cachedDuplicateProjectIDs = caches.duplicateProjectIDs
+        offlineVolumeNames = caches.offlineVolumes
+
+        // didSet recompute suppressed — caches above were computed off-main
+        isBatchUpdating = true
+        projects = fetched
+        isBatchUpdating = false
+        isInitialLoad = false
+
+        // The precomputed filtered list assumes default sort and no filters.
+        if hasNonDefaultFilterOrSort {
+            recomputeFilteredProjects()
+        } else {
+            filterGeneration &+= 1
+            applyFilteredProjects(caches.filteredProjects)
+        }
+    }
+
+    /// nil when `fetched` is identical to the current in-memory state.
+    @concurrent
+    private static func prepareObservedUpdate(
+        fetched: [ProjectRecord],
+        current: [ProjectRecord]
+    ) async -> ComputedCaches? {
+        if fetched == current { return nil }
+        return await computeCaches(for: fetched)
     }
 
     private var hasNonDefaultFilterOrSort: Bool {
@@ -565,7 +681,8 @@ final class AppState {
         var collectionDoneCounts: [UUID: Int]
     }
 
-    private nonisolated func computeCachesOffMainThread(for projects: [ProjectRecord]) -> ComputedCaches {
+    @concurrent
+    private static func computeCaches(for projects: [ProjectRecord]) async -> ComputedCaches {
         var statusCounts: [CompletionStatus: Int] = [:]
         var colorLabelCounts: [ColorLabel: Int] = [:]
         var volumeCounts: [String: Int] = [:]
@@ -668,16 +785,44 @@ final class AppState {
     // MARK: - Scanning
 
     func startScan(forceReparse: Bool = false) async {
+        await runScan { scanner, progress in
+            try await scanner.scanAllLocations(forceReparse: forceReparse, progress: progress)
+        }
+    }
+
+    func startLocationScan(_ location: LocationRecord, forceReparse: Bool = true) async {
+        await runScan(coveringLocations: [location]) { scanner, progress in
+            try await scanner.scanLocation(location, forceReparse: forceReparse, progress: progress)
+        }
+    }
+
+    /// Shared scan driver; the wrapping Task exists only to give Stop Scan a
+    /// cancellation handle. `coveringLocations` nil = every enabled location.
+    /// Volumes whose enabled locations are ALL covered get a fresh replay
+    /// baseline, captured BEFORE crawling so mid-scan changes replay later.
+    private func runScan(
+        coveringLocations: [LocationRecord]? = nil,
+        _ operation: @escaping @Sendable (ProjectScanner, @escaping @Sendable (ScanProgress) -> Void) async throws -> Int
+    ) async {
         guard !isScanning else { return }
         isScanning = true
         scanProgress = .starting
 
-        // Run scan in detached task to avoid blocking MainActor
+        let coveredPaths = coveringLocations.map { Set($0.map(\.path)) }
+        let freshBaselines: [(key: String, target: VolumeWatchTarget, id: FSEventStreamEventId)] =
+            volumeWatchTargets().compactMap { target in
+                let fullyCovered = coveredPaths.map { covered in
+                    target.paths.allSatisfy { covered.contains($0) }
+                } ?? true
+                guard fullyCovered, let baseline = currentBaseline(for: target) else { return nil }
+                return (target.key, target, baseline)
+            }
+
         let scanner = self.scanner
-        let task = Task.detached(priority: .userInitiated) { () -> Result<Int, Error> in
+        let task = Task { () -> Result<Int, Error> in
             do {
-                let count = try await scanner.scanAllLocations(forceReparse: forceReparse) { progress in
-                    Task { @MainActor [weak self] in
+                let count = try await operation(scanner) { [weak self] progress in
+                    Task { @MainActor in
                         self?.scanProgress = progress
                     }
                 }
@@ -690,22 +835,31 @@ final class AppState {
         let result = await task.value
         cancelScanAction = nil
 
-        await finishScan(with: result)
+        await finishScan(with: result, freshBaselines: freshBaselines)
     }
 
     func cancelScan() {
         cancelScanAction?()
     }
 
-    private func finishScan(with result: Result<Int, Error>) async {
+    private func finishScan(
+        with result: Result<Int, Error>,
+        freshBaselines: [(key: String, target: VolumeWatchTarget, id: FSEventStreamEventId)]
+    ) async {
+        // Projects streamed in via the observation; only location metadata
+        // (counts, last-scanned dates) needs a refresh.
+        locations = (try? await database.fetchAllLocations()) ?? locations
+
         switch result {
         case .success:
-            await loadData()
+            for baseline in freshBaselines {
+                persistBaseline(baseline.id, for: baseline.target)
+            }
+            ensureFileWatchers()
         case .failure(let error):
             if error is CancellationError {
                 // Batches saved before cancellation are already in the DB — show them.
                 scanProgress = nil
-                await loadData()
             } else {
                 reportError("Scan Failed", error)
                 scanProgress = .failed(error)
@@ -715,31 +869,6 @@ final class AppState {
         isScanning = false
     }
 
-    func startLocationScan(_ location: LocationRecord) async {
-        guard !isScanning else { return }
-        isScanning = true
-        scanProgress = .starting
-
-        let scanner = self.scanner
-        let task = Task.detached(priority: .userInitiated) { () -> Result<Int, Error> in
-            do {
-                let count = try await scanner.scanLocation(location, forceReparse: true) { progress in
-                    Task { @MainActor [weak self] in
-                        self?.scanProgress = progress
-                    }
-                }
-                return .success(count)
-            } catch {
-                return .failure(error)
-            }
-        }
-        cancelScanAction = { task.cancel() }
-        let result = await task.value
-        cancelScanAction = nil
-
-        await finishScan(with: result)
-    }
-
     func rescanProject(_ project: ProjectRecord) async {
         guard !isScanning else { return }
         isScanning = true
@@ -747,7 +876,7 @@ final class AppState {
 
         let scanner = self.scanner
         let alsPath = project.alsFilePath
-        let task = Task.detached(priority: .userInitiated) { () -> Result<ProjectRecord?, Error> in
+        let task = Task { () -> Result<ProjectRecord?, Error> in
             do {
                 let record = try await scanner.scanSingleProject(alsFilePath: alsPath)
                 return .success(record)
@@ -761,10 +890,9 @@ final class AppState {
 
         switch result {
         case .success(let record):
-            if let record = record, projects.contains(where: { $0.id == record.id }) {
-                applyUpdatedProject(record)
-            } else {
-                await loadData()
+            // nil record = file is gone; drop its stale index entry
+            if record == nil {
+                try? await database.deleteProject(byAlsFilePath: alsPath)
             }
             scanProgress = .completed(projectCount: 1, duration: 0)
         case .failure(let error):
@@ -786,44 +914,21 @@ final class AppState {
         var isCancelled = false
         cancelScanAction = { isCancelled = true }
 
-        // Collect results first; state is applied in one synchronous pass below so
-        // filter/search changes made mid-rescan aren't swallowed by isBatchUpdating.
-        var updatedRecords: [ProjectRecord] = []
+        var updatedCount = 0
         var scannedCount = 0
         for project in projectsToRescan {
             if isCancelled { break }
             scannedCount += 1
             scanProgress = .parsing(current: scannedCount, total: total, projectName: project.name)
 
-            let alsPath = project.alsFilePath
-            let result: Result<ProjectRecord?, Error> = await Task.detached(priority: .userInitiated) {
-                do {
-                    let record = try await scanner.scanSingleProject(alsFilePath: alsPath)
-                    return .success(record)
-                } catch {
-                    return .failure(error)
-                }
-            }.value
-
-            if case .success(let record) = result, let record = record {
-                updatedRecords.append(record)
+            // scanSingleProject is @concurrent — parsing runs off the main actor.
+            if (try? await scanner.scanSingleProject(alsFilePath: project.alsFilePath)) != nil {
+                updatedCount += 1
             }
         }
         cancelScanAction = nil
 
-        // Apply all updates in one pass with no suspension points
-        let indexByID = Dictionary(uniqueKeysWithValues: projects.enumerated().map { ($1.id, $0) })
-        isBatchUpdating = true
-        for record in updatedRecords {
-            if let index = indexByID[record.id] {
-                projects[index] = record
-            }
-        }
-        isBatchUpdating = false
-        recomputeCachedCounts()
-        recomputeFilteredProjects()
-
-        scanProgress = isCancelled ? nil : .completed(projectCount: updatedRecords.count, duration: 0)
+        scanProgress = isCancelled ? nil : .completed(projectCount: updatedCount, duration: 0)
         isScanning = false
     }
 
@@ -833,11 +938,299 @@ final class AppState {
         let location = LocationRecord.userAdded(path: path, displayName: displayName)
         try await database.saveLocation(location)
         locations.append(location)
+        ensureFileWatchers()
     }
 
     func removeLocation(id: UUID) async throws {
         try await database.deleteLocation(id: id)
         locations.removeAll { $0.id == id }
+        ensureFileWatchers()
+    }
+
+    // MARK: - File System Watching (FSEvents)
+
+    private static let watchLog = Logger(subsystem: "computerdata.abledex", category: "filewatch")
+
+    /// Traces watcher decisions to the unified log; DEBUG builds also append
+    /// to $TMPDIR/abledex-watch.log so scan/replay behavior can be inspected
+    /// without a console attached.
+    private static func watchTrace(_ message: String) {
+        watchLog.log("\(message, privacy: .public)")
+        #if DEBUG
+        let line = "\(Date()) \(message)\n"
+        if let data = line.data(using: .utf8) {
+            let url = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("abledex-watch.log")
+            if let handle = try? FileHandle(forWritingTo: url) {
+                handle.seekToEndOfFile()
+                handle.write(data)
+                try? handle.close()
+            } else {
+                try? data.write(to: url)
+            }
+        }
+        #endif
+    }
+
+    /// One FSEvents stream per volume hosting enabled locations, keyed by a
+    /// stable volume identity ("boot", or the volume UUID for external drives).
+    private var fileWatchers: [String: FileSystemWatcher] = [:]
+    private var pendingFileEvents: [FileSystemWatcher.Event] = []
+    private var fileEventsDrainTask: Task<Void, Never>?
+    private var latestEventIDsByVolume: [String: FSEventStreamEventId] = [:]
+
+    /// A volume with enabled locations on it, resolved to what FSEvents needs.
+    private struct VolumeWatchTarget {
+        let key: String        // persistence key: "boot" or volume UUID
+        let isBoot: Bool
+        let device: dev_t
+        let volumeRoot: String
+        var paths: [String]    // absolute location paths on this volume
+    }
+
+    private func volumeWatchTargets() -> [VolumeWatchTarget] {
+        var targets: [String: VolumeWatchTarget] = [:]
+        for location in locations where location.isEnabled {
+            guard FileManager.default.fileExists(atPath: location.path) else { continue }
+            let url = URL(fileURLWithPath: location.path)
+            guard let values = try? url.resourceValues(forKeys: [.volumeURLKey, .volumeUUIDStringKey]),
+                  let volumeRoot = values.volume?.path else { continue }
+            var status = stat()
+            guard stat(location.path, &status) == 0 else { continue }
+
+            let isBoot = volumeRoot == "/"
+            let key = isBoot ? "boot" : (values.volumeUUIDString ?? volumeRoot)
+            targets[key, default: VolumeWatchTarget(
+                key: key, isBoot: isBoot, device: status.st_dev, volumeRoot: volumeRoot, paths: []
+            )].paths.append(location.path)
+        }
+        return targets.values.map { target in
+            var sorted = target
+            sorted.paths.sort()
+            return sorted
+        }
+    }
+
+    // MARK: Baseline persistence (per volume)
+
+    private func baselineDefaultsKey(_ volumeKey: String) -> String { "fsEventsBaseline.\(volumeKey)" }
+    private func journalDefaultsKey(_ volumeKey: String) -> String { "fsEventsJournal.\(volumeKey)" }
+
+    /// The stored replay baseline, or nil when replay can't be trusted.
+    /// Device event IDs only mean something within the journal that issued
+    /// them, so external volumes also require a matching journal UUID.
+    private func storedBaseline(for target: VolumeWatchTarget) -> FSEventStreamEventId? {
+        let defaults = UserDefaults.standard
+        var stored = defaults.string(forKey: baselineDefaultsKey(target.key)).flatMap { UInt64($0) }
+        if stored == nil, target.isBoot {
+            // Pre-per-volume releases kept a single host-wide key
+            stored = defaults.string(forKey: "fsEventsLastEventID").flatMap { UInt64($0) }
+        }
+        guard let stored else { return nil }
+        if !target.isBoot {
+            guard let journal = FileSystemWatcher.journalUUID(forDevice: target.device),
+                  journal == defaults.string(forKey: journalDefaultsKey(target.key)) else { return nil }
+        }
+        return stored
+    }
+
+    private func persistBaseline(_ id: FSEventStreamEventId, for target: VolumeWatchTarget) {
+        let defaults = UserDefaults.standard
+        defaults.set(String(id), forKey: baselineDefaultsKey(target.key))
+        if !target.isBoot, let journal = FileSystemWatcher.journalUUID(forDevice: target.device) {
+            defaults.set(journal, forKey: journalDefaultsKey(target.key))
+        }
+    }
+
+    /// A fresh "consistent as of now" baseline in the volume's own ID space.
+    /// nil when the device's journal isn't available (yet) — a zero ID must
+    /// never be persisted or used as sinceWhen, or the stream replays the
+    /// volume's entire history.
+    private func currentBaseline(for target: VolumeWatchTarget) -> FSEventStreamEventId? {
+        if target.isBoot { return FSEventsGetCurrentEventId() }
+        let id = FileSystemWatcher.lastEventID(forDevice: target.device)
+        return id > 0 ? id : nil
+    }
+
+    /// FSEvents' device APIs (journal UUID, last event ID) become available
+    /// shortly AFTER the mount notification fires. Poll briefly so replay
+    /// validation doesn't misread "not ready yet" as "no journal".
+    private func waitForJournal(device: dev_t, timeout: Duration = .seconds(3)) async -> String? {
+        let clock = ContinuousClock()
+        let deadline = clock.now + timeout
+        while clock.now < deadline {
+            if let uuid = FileSystemWatcher.journalUUID(forDevice: device) { return uuid }
+            try? await Task.sleep(for: .milliseconds(200))
+        }
+        return FileSystemWatcher.journalUUID(forDevice: device)
+    }
+
+    // MARK: Watcher lifecycle
+
+    /// Launch-time indexing: locations covered by a valid journal baseline
+    /// replay deltas; only the remainder gets a real scan.
+    func startAutomaticIndexing() async {
+        let autoScan = UserDefaults.standard.object(forKey: "autoScanOnLaunch") as? Bool ?? true
+        let targets = volumeWatchTargets()
+
+        var volumeKeyByPath: [String: String] = [:]
+        for target in targets {
+            for path in target.paths { volumeKeyByPath[path] = target.key }
+        }
+        let replayableKeys = Set(targets.filter { storedBaseline(for: $0) != nil }.map(\.key))
+
+        let needingScan = locations.filter { location in
+            guard location.isEnabled, let key = volumeKeyByPath[location.path] else { return false }
+            return location.lastScannedAt == nil || !replayableKeys.contains(key)
+        }
+
+        if needingScan.isEmpty || !autoScan {
+            ensureFileWatchers()
+        } else {
+            await runScan(coveringLocations: needingScan) { scanner, progress in
+                try await scanner.scanLocations(needingScan, forceReparse: false, progress: progress)
+            }
+        }
+    }
+
+    /// (Re)starts one stream per volume — resuming from the stored baseline
+    /// when valid (replays history), else watching from now. No-op for volumes
+    /// already watched correctly; streams for vanished volumes stop.
+    private func ensureFileWatchers() {
+        let targets = volumeWatchTargets()
+        let activeKeys = Set(targets.map(\.key))
+
+        for (key, watcher) in fileWatchers where !activeKeys.contains(key) {
+            watcher.stop()
+            fileWatchers[key] = nil
+        }
+
+        for target in targets {
+            if let existing = fileWatchers[target.key], existing.absolutePaths == target.paths { continue }
+            fileWatchers[target.key]?.stop()
+
+            let sinceID = storedBaseline(for: target)
+                ?? currentBaseline(for: target)
+                ?? FSEventStreamEventId(kFSEventStreamEventIdSinceNow)
+            let streamTarget: FileSystemWatcher.Target = target.isBoot
+                ? .host(paths: target.paths)
+                : .device(
+                    device: target.device,
+                    volumeRoot: target.volumeRoot,
+                    relativePaths: target.paths.map { Self.relativePath($0, toVolumeRoot: target.volumeRoot) }
+                )
+
+            let volumeKey = target.key
+            let watcher = FileSystemWatcher(target: streamTarget, sinceEventID: sinceID) { [weak self] events, latestEventID in
+                Task { @MainActor [weak self] in
+                    self?.enqueueFileEvents(events, latestEventID: latestEventID, volumeKey: volumeKey)
+                }
+            }
+            fileWatchers[target.key] = watcher
+            watcher.start()
+        }
+    }
+
+    private static func relativePath(_ path: String, toVolumeRoot root: String) -> String {
+        guard path != root else { return "" }
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        return path.hasPrefix(prefix) ? String(path.dropFirst(prefix.count)) : path
+    }
+
+    private func enqueueFileEvents(
+        _ events: [FileSystemWatcher.Event],
+        latestEventID: FSEventStreamEventId,
+        volumeKey: String
+    ) {
+        pendingFileEvents.append(contentsOf: events)
+        latestEventIDsByVolume[volumeKey] = latestEventID
+        guard fileEventsDrainTask == nil else { return }
+        fileEventsDrainTask = Task { @MainActor in
+            // Extra coalescing: Live touches several files per save
+            try? await Task.sleep(for: .milliseconds(500))
+            while !pendingFileEvents.isEmpty {
+                let batch = pendingFileEvents
+                pendingFileEvents.removeAll()
+                await processFileEvents(batch)
+            }
+            fileEventsDrainTask = nil
+            // The index has caught up with each volume as of its last event.
+            // Never move a baseline backward: replayed (historical) events
+            // carry IDs older than a baseline a scan persisted mid-drain, and
+            // regressing would re-deliver the same events on every remount.
+            let caughtUp = latestEventIDsByVolume
+            latestEventIDsByVolume.removeAll()
+            let defaults = UserDefaults.standard
+            for (key, id) in caughtUp {
+                let stored = defaults.string(forKey: baselineDefaultsKey(key)).flatMap { UInt64($0) } ?? 0
+                if id > stored {
+                    defaults.set(String(id), forKey: baselineDefaultsKey(key))
+                }
+            }
+        }
+    }
+
+    /// Changed .als files re-parse individually; removed ones drop their
+    /// record; directory-level changes and journal gaps trigger an incremental
+    /// scan of the affected locations (whose pruning handles folder removals).
+    private func processFileEvents(_ events: [FileSystemWatcher.Event]) async {
+        var locationIDsToScan = Set<UUID>()
+        var alsToRescan: [String] = []
+        var alsToDelete: [String] = []
+        var seenPaths = Set<String>()
+
+        func markContainingLocations(of path: String) {
+            for location in locations where location.isEnabled {
+                if path == location.path || path.hasPrefix(location.path + "/") {
+                    locationIDsToScan.insert(location.id)
+                }
+            }
+        }
+
+        for event in events {
+            let path = event.path
+            guard seenPaths.insert(path).inserted else { continue }
+            Self.watchTrace("event \(String(format: "0x%08x", event.flags)) \(path)")
+
+            // Volume lifecycle is VolumeMonitor's job; hidden-path churn
+            // (.fseventsd, .Spotlight-V100, .Trashes, .DS_Store) accompanies
+            // every mount and is invisible to the crawler anyway.
+            if event.isMountOrUnmount || path.contains("/.") {
+                continue
+            }
+            if event.mustScanSubDirs {
+                markContainingLocations(of: path)
+                continue
+            }
+            // Live's own churn on every save — never affects the index
+            if path.contains("/Backup/") || path.contains("/Trash/") || path.contains("/Ableton Project Info/") {
+                continue
+            }
+            if path.lowercased().hasSuffix(".als") {
+                if FileManager.default.fileExists(atPath: path) {
+                    alsToRescan.append(path)
+                } else {
+                    alsToDelete.append(path)
+                }
+            } else if event.isDirectory, event.wasCreated || event.wasRemoved || event.wasRenamed {
+                // Folder moves deliver no per-file events — only a scan can
+                // discover (or prune) the projects inside
+                markContainingLocations(of: path)
+            }
+        }
+
+        for path in alsToDelete {
+            try? await database.deleteProject(byAlsFilePath: path)
+        }
+        let scanner = self.scanner
+        for path in alsToRescan {
+            _ = try? await scanner.scanSingleProject(alsFilePath: path)
+        }
+        if !locationIDsToScan.isEmpty, !isScanning {
+            let affected = locations.filter { locationIDsToScan.contains($0.id) }
+            await runScan(coveringLocations: affected) { scanner, progress in
+                try await scanner.scanLocations(affected, forceReparse: false, progress: progress)
+            }
+        }
     }
 
     // MARK: - Volume Monitoring
@@ -900,6 +1293,10 @@ final class AppState {
     private func handleVolumeMounted(url: URL, name: String) async {
         offlineVolumeNames.remove(name)
 
+        // Only user-visible drives under /Volumes — NSWorkspace also announces
+        // simulator disk images and other mounts that never hold projects.
+        guard url.path.hasPrefix("/Volumes/") else { return }
+
         // Respect the "Scan external volumes automatically" setting
         guard UserDefaults.standard.object(forKey: "scanExternalVolumes") as? Bool ?? true else { return }
 
@@ -910,19 +1307,35 @@ final class AppState {
         mountsBeingHandled.insert(url.path)
         defer { mountsBeingHandled.remove(url.path) }
 
-        let existingLocation = try? await database.fetchLocation(byPath: url.path)
-
-        if existingLocation == nil {
+        if let existingLocation = try? await database.fetchLocation(byPath: url.path) {
+            guard existingLocation.isEnabled else { return }
+            // FSEvents needs a moment to open the just-mounted volume's journal;
+            // deciding before it's ready misreads every mount as "no journal".
+            var mountStat = stat()
+            if stat(url.path, &mountStat) == 0 {
+                _ = await waitForJournal(device: mountStat.st_dev)
+            }
+            // With a valid baseline the volume's journal replays everything
+            // that changed since last index — no crawl.
+            let target = volumeWatchTargets().first { $0.paths.contains(existingLocation.path) }
+            if existingLocation.lastScannedAt != nil, let target, storedBaseline(for: target) != nil {
+                Self.watchTrace("mount \(name): replaying journal, no scan")
+                ensureFileWatchers()
+            } else {
+                Self.watchTrace("mount \(name): no valid baseline (target: \(target != nil), scanned: \(existingLocation.lastScannedAt != nil)) — scanning")
+                await startLocationScan(existingLocation, forceReparse: false)
+            }
+        } else {
             let location = LocationRecord.autoDetected(path: url.path, displayName: name)
             do {
                 try await database.saveLocation(location)
                 locations.append(location)
             } catch {
                 reportError("Failed to Add Location", error)
+                return
             }
+            await startLocationScan(location, forceReparse: false)
         }
-
-        await startScan()
     }
 
     private func handleVolumeUnmounted(url: URL, name: String) {
@@ -931,6 +1344,8 @@ final class AppState {
         if volumeCounts.keys.contains(name) {
             offlineVolumeNames.insert(name)
         }
+        // Stops the volume's stream; its baseline stays persisted for remount
+        ensureFileWatchers()
     }
 
     // MARK: - Incremental Updates
@@ -1069,14 +1484,12 @@ final class AppState {
 
     func deleteProject(_ project: ProjectRecord) async throws {
         try await database.deleteProject(id: project.id)
-        projects.removeAll { $0.id == project.id }
         selectedProjectIDs.remove(project.id)
     }
 
     func deleteSelectedProjects() async throws {
         let idsToDelete = selectedProjectIDs
         try await database.deleteProjects(ids: Array(idsToDelete))
-        projects.removeAll { idsToDelete.contains($0.id) }
         selectedProjectIDs.removeAll()
     }
 
@@ -1110,24 +1523,15 @@ final class AppState {
 
     // MARK: - Batch Operations
 
-    /// Performs a batch update: collects all mutations, saves to DB in one transaction,
-    /// updates the projects array once, then recomputes caches once.
+    /// Saves all mutations in one DB transaction; the projects observation
+    /// delivers the new state.
     private func performBatchUpdate(_ mutate: (inout [ProjectRecord]) -> [ProjectRecord]) async throws {
         var mutableProjects = projects
         let updatedRecords = mutate(&mutableProjects)
 
         guard !updatedRecords.isEmpty else { return }
 
-        // Save all changes in a single DB transaction
         try await database.saveProjects(updatedRecords)
-
-        // Apply to array with recomputation suppressed, then trigger once
-        isBatchUpdating = true
-        projects = mutableProjects
-        isBatchUpdating = false
-
-        recomputeCachedCounts()
-        recomputeFilteredProjects()
     }
 
     func batchSetStatus(_ status: CompletionStatus) async throws {
@@ -1234,35 +1638,18 @@ final class AppState {
     }
 
     func deleteCollection(_ collection: CollectionRecord) async throws {
+        // Membership rows clear in the same transaction; observation reconciles
         try await database.deleteCollection(id: collection.id)
         collections.removeAll { $0.id == collection.id }
         if selectedCollectionFilter == collection.id {
             selectedCollectionFilter = nil
         }
-
-        // Clear membership in memory (DB rows were cleared in the same transaction)
-        isBatchUpdating = true
-        for index in projects.indices where projects[index].collectionID == collection.id {
-            projects[index].collectionID = nil
-        }
-        isBatchUpdating = false
-        collectionCounts[collection.id] = nil
-        collectionDoneCounts[collection.id] = nil
-        recomputeFilteredProjects()
     }
 
     /// Assigns (or with nil, removes) the given projects to a music project.
     func assignProjects(_ projectIDs: Set<UUID>, toCollection collectionID: UUID?) async throws {
         guard !projectIDs.isEmpty else { return }
         try await database.assignProjects(ids: Array(projectIDs), toCollection: collectionID)
-
-        isBatchUpdating = true
-        for index in projects.indices where projectIDs.contains(projects[index].id) {
-            projects[index].collectionID = collectionID
-        }
-        isBatchUpdating = false
-        recomputeCachedCounts()
-        recomputeFilteredProjects()
     }
 
     func collection(for project: ProjectRecord) -> CollectionRecord? {

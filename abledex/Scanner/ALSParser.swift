@@ -87,53 +87,37 @@ enum ALSParserError: Error, LocalizedError {
     }
 }
 
-// Cached regex patterns — compiled once at launch, reused across all parse calls
-private enum ALSRegex {
-    static let timeSignatureNumerator = try! NSRegularExpression(
-        pattern: #"<TimeSignature>[^<]*<[^>]*Numerator Value="(\d+)""#
-    )
-    static let timeSignatureDenominator = try! NSRegularExpression(
-        pattern: #"<TimeSignature>[^<]*<[^>]*Denominator Value="(\d+)""#
-    )
-    static let currentEnd = try! NSRegularExpression(
-        pattern: #"<CurrentEnd Value="([\d.]+)""#
-    )
-    static let sampleName = try! NSRegularExpression(
-        pattern: #"<Name Value="([^"]+\.(wav|aif|aiff|mp3|flac|m4a))""#,
-        options: .caseInsensitive
-    )
-    static let musicalKey = try! NSRegularExpression(
-        pattern: #"<ScaleInformation>\s*<Root Value="(\d+)"\s*/>\s*<Name Value="(\d+)""#
-    )
-}
+nonisolated struct ALSParser: Sendable {
 
-struct ALSParser: Sendable {
+    init() {}
 
-    nonisolated init() {}
-
-    nonisolated func parse(alsFilePath: URL) throws -> ParsedProjectData {
+    /// Single streaming pass: gzip chunks feed the byte scanner directly, so
+    /// peak memory is a small carry buffer, never the decompressed document
+    /// (large sets exceed 100MB of XML and several parses run concurrently).
+    func parse(alsFilePath: URL) throws -> ParsedProjectData {
         guard FileManager.default.fileExists(atPath: alsFilePath.path) else {
             throw ALSParserError.fileNotFound
         }
 
-        let compressedData = try Data(contentsOf: alsFilePath)
-        let xmlData = try decompressGzip(data: compressedData)
-
-        guard let xmlString = String(data: xmlData, encoding: .utf8) else {
-            throw ALSParserError.invalidXML
+        let compressedData = try Data(contentsOf: alsFilePath, options: .mappedIfSafe)
+        let scanner = ALSStreamScanner()
+        try decompressGzip(data: compressedData) { chunk in
+            scanner.consume(chunk)
         }
-
-        return parseXML(xmlString)
+        return scanner.finish()
     }
 
     /// Returns the raw decompressed XML string from an ALS file
-    nonisolated func getRawXML(alsFilePath: URL) throws -> String {
+    func getRawXML(alsFilePath: URL) throws -> String {
         guard FileManager.default.fileExists(atPath: alsFilePath.path) else {
             throw ALSParserError.fileNotFound
         }
 
-        let compressedData = try Data(contentsOf: alsFilePath)
-        let xmlData = try decompressGzip(data: compressedData)
+        let compressedData = try Data(contentsOf: alsFilePath, options: .mappedIfSafe)
+        var xmlData = Data()
+        try decompressGzip(data: compressedData) { chunk in
+            xmlData.append(chunk.baseAddress!, count: chunk.count)
+        }
 
         guard let xmlString = String(data: xmlData, encoding: .utf8) else {
             throw ALSParserError.invalidXML
@@ -142,15 +126,23 @@ struct ALSParser: Sendable {
         return xmlString
     }
 
-    private nonisolated func decompressGzip(data: Data) throws -> Data {
+    /// Streaming gzip decompression: emits decompressed bytes to `onChunk` in
+    /// 64KB pieces instead of accumulating the whole document.
+    private func decompressGzip(data: Data, onChunk: (UnsafeBufferPointer<UInt8>) -> Void) throws {
         guard data.count > 10 else {
             throw ALSParserError.decompressionFailed
         }
 
         // Check for gzip magic number
         guard data[0] == 0x1f && data[1] == 0x8b else {
-            // Not gzipped - might be raw XML
-            return data
+            // Not gzipped — might be raw XML
+            guard String(data: data, encoding: .utf8) != nil else {
+                throw ALSParserError.invalidXML
+            }
+            data.withUnsafeBytes { raw in
+                onChunk(raw.bindMemory(to: UInt8.self))
+            }
+            return
         }
 
         // Skip gzip header to find deflate payload
@@ -188,7 +180,6 @@ struct ALSParser: Sendable {
 
         let deflateData = data.subdata(in: headerLength..<(data.count - 8))
 
-        // Streaming decompression — grows buffer as needed instead of pre-allocating 100MB
         let streamPtr = UnsafeMutablePointer<compression_stream>.allocate(capacity: 1)
         streamPtr.initialize(to: compression_stream(
             dst_ptr: UnsafeMutablePointer<UInt8>.allocate(capacity: 0),
@@ -208,11 +199,10 @@ struct ALSParser: Sendable {
         }
 
         let chunkSize = 65_536 // 64KB output chunks
-        var result = Data()
-        result.reserveCapacity(min(deflateData.count * 10, 50_000_000))
-
         let outputBuffer = UnsafeMutablePointer<UInt8>.allocate(capacity: chunkSize)
         defer { outputBuffer.deallocate() }
+
+        var producedAnyOutput = false
 
         try deflateData.withUnsafeBytes { sourceBuffer in
             let sourcePtr = sourceBuffer.bindMemory(to: UInt8.self)
@@ -227,7 +217,8 @@ struct ALSParser: Sendable {
 
                 let bytesWritten = chunkSize - streamPtr.pointee.dst_size
                 if bytesWritten > 0 {
-                    result.append(outputBuffer, count: bytesWritten)
+                    producedAnyOutput = true
+                    onChunk(UnsafeBufferPointer(start: outputBuffer, count: bytesWritten))
                 }
 
                 switch processStatus {
@@ -241,185 +232,396 @@ struct ALSParser: Sendable {
             }
         }
 
-        guard !result.isEmpty else {
+        guard producedAnyOutput else {
             throw ALSParserError.decompressionFailed
         }
+    }
+}
 
-        return result
+// MARK: - Streaming Byte Scanner
+
+/// Extracts every project metric in one pass over the decompressed XML bytes,
+/// fed chunk-by-chunk. Only captured attribute values are materialized; at
+/// most `lookahead` bytes carry over between chunks for straddling tokens.
+///
+/// Attribute values in ALS XML never contain a raw '<' (it is entity-escaped),
+/// so scanning for '<' via memchr never false-positives inside a value.
+private final class ALSStreamScanner {
+    private var result = ParsedProjectData()
+
+    /// Unprocessed tail of the previous chunk + the current chunk.
+    private var buffer: [UInt8] = []
+    /// Absolute document offset of buffer[0].
+    private var processedOffset = 0
+    private var headerParsed = false
+
+    /// Tokens starting within `lookahead` bytes of the buffer end are deferred
+    /// to the next chunk so a tag + its attribute value are always fully
+    /// visible when processed. Must exceed the longest expected tag + value.
+    private static let lookahead = 16_384
+
+    // Tempo: first <Tempo> block's <Manual Value="..."> is the project BPM.
+    private var inTempo = false
+    private var bpmFound = false
+
+    // Time signature: the tag immediately following <TimeSignature> carries
+    // "...Numerator Value" / "...Denominator Value" attributes.
+    private var timeSignaturePending = false
+
+    // Arrangement end (first <CurrentEnd Value="...">), converted to seconds
+    // at finish() once BPM is known.
+    private var currentEndBeats: Double?
+
+    // Sample references: only <FileRef> blocks inside <SampleRef> count
+    // (Live uses FileRef for presets, skins, and history too), and only the
+    // first FileRef per SampleRef.
+    private var inSampleRef = false
+    private var sampleRefHadFileRef = false
+    private var inFileRef = false
+    private var pendingAbsolutePath: String?
+    private var pendingRelativePath: String?
+    private var seenReferences = Set<SampleFileReference>()
+
+    // Plugins: an info tag opens a window; the next name tag within
+    // `pluginNameWindow` bytes is the plugin's name.
+    private enum PendingPlugin { case au, vst3, vst2 }
+    private var pendingPlugin: PendingPlugin?
+    private var pendingPluginDeadline = 0
+    private static let pluginNameWindow = 2000
+    private var pluginNames = Set<String>()
+
+    private var sampleNames = Set<String>()
+
+    // Musical key: <ScaleInformation> → <Root Value="n"/> → <Name Value="m"/>
+    private enum ScaleState { case none, expectRoot, expectName(root: Int) }
+    private var scaleState = ScaleState.none
+    private var musicalKeys = Set<String>()
+
+    private static let maxSampleNames = 500
+    private static let maxReferences = 500
+    private static let maxKeys = 100
+    private static let maxPlugins = 400
+
+    func consume(_ chunk: UnsafeBufferPointer<UInt8>) {
+        buffer.append(contentsOf: chunk)
+        if !headerParsed {
+            parseHeader()
+            headerParsed = true
+        }
+        let processed = scan(isFinal: false)
+        if processed > 0 {
+            buffer.removeSubrange(0..<processed)
+            processedOffset += processed
+        }
     }
 
-    private nonisolated func parseXML(_ xmlString: String) -> ParsedProjectData {
-        var result = ParsedProjectData()
-
-        // Parse Ableton version - look in first 2000 chars for efficiency
-        let headerSection = String(xmlString.prefix(2000))
-
-        if let creatorStart = headerSection.range(of: "Creator=\"Ableton Live "),
-           let creatorEnd = headerSection.range(of: "\"", range: creatorStart.upperBound..<headerSection.endIndex) {
-            result.abletonVersion = String(headerSection[creatorStart.upperBound..<creatorEnd.lowerBound])
+    func finish() -> ParsedProjectData {
+        if !headerParsed {
+            parseHeader()
+            headerParsed = true
         }
+        _ = scan(isFinal: true)
+        buffer.removeAll(keepingCapacity: false)
 
-        // Parse MinorVersion attribute from the <Ableton ...> header element
-        if let minorStart = headerSection.range(of: "MinorVersion=\""),
-           let minorEnd = headerSection.range(of: "\"", range: minorStart.upperBound..<headerSection.endIndex) {
-            let value = String(headerSection[minorStart.upperBound..<minorEnd.lowerBound])
-            result.abletonMinorVersion = value.isEmpty ? nil : value
-        }
-
-        // Parse BPM - extract from Tempo block
-        result.bpm = extractBPM(from: xmlString)
-
-        // Parse time signature
-        result.timeSignatureNumerator = extractFirstInt(from: xmlString, regex: ALSRegex.timeSignatureNumerator) ?? 4
-        result.timeSignatureDenominator = extractFirstInt(from: xmlString, regex: ALSRegex.timeSignatureDenominator) ?? 4
-
-        // Count tracks - fast counting without creating arrays
-        result.audioTrackCount = countOccurrences(of: "<AudioTrack Id=", in: xmlString)
-        result.midiTrackCount = countOccurrences(of: "<MidiTrack Id=", in: xmlString)
-        result.returnTrackCount = countOccurrences(of: "<ReturnTrack Id=", in: xmlString)
-
-        // Parse arrangement length
-        if let beats = extractFirstDouble(from: xmlString, regex: ALSRegex.currentEnd),
-           let bpm = result.bpm, bpm > 0 {
+        if result.timeSignatureNumerator == nil { result.timeSignatureNumerator = 4 }
+        if result.timeSignatureDenominator == nil { result.timeSignatureDenominator = 4 }
+        if let beats = currentEndBeats, let bpm = result.bpm, bpm > 0 {
             result.duration = (beats / bpm) * 60.0
         }
-
-        // Extract plugins (limit search to avoid memory issues)
-        result.plugins = extractPlugins(from: xmlString)
-
-        // Extract sample count (not full paths to save memory)
-        result.samplePaths = extractSampleNames(from: xmlString)
-
-        // Extract full sample file references (absolute + relative paths)
-        // for missing-sample detection
-        result.sampleFileReferences = extractSampleFileReferences(from: xmlString)
-
-        // Extract musical keys from scale information
-        result.musicalKeys = extractMusicalKeys(from: xmlString)
-
+        result.plugins = pluginNames.sorted()
+        result.samplePaths = sampleNames.sorted()
+        result.musicalKeys = musicalKeys.sorted()
         return result
     }
 
-    /// Fast occurrence counting without creating intermediate arrays
-    private nonisolated func countOccurrences(of needle: String, in haystack: String) -> Int {
-        var count = 0
-        var searchRange = haystack.startIndex..<haystack.endIndex
-        while let foundRange = haystack.range(of: needle, range: searchRange) {
-            count += 1
-            searchRange = foundRange.upperBound..<haystack.endIndex
+    // MARK: Header (Ableton version attributes, always in the first bytes)
+
+    private func parseHeader() {
+        let limit = min(2000, buffer.count)
+        buffer.withUnsafeBufferPointer { buf in
+            guard let base = buf.baseAddress else { return }
+            if let creator = find("Creator=\"Ableton Live ", in: base, 0, limit),
+               let (value, _) = quotedValue(base, creator, limit) {
+                result.abletonVersion = value
+            }
+            if let minor = find("MinorVersion=\"", in: base, 0, limit),
+               let (value, _) = quotedValue(base, minor, limit) {
+                result.abletonMinorVersion = value.isEmpty ? nil : value
+            }
         }
-        return count
     }
 
-    private nonisolated func extractBPM(from xmlString: String) -> Double? {
-        // Find the Tempo block and extract the Manual value
-        // The structure is: <Tempo>...<Manual Value="120" />...</Tempo>
-        guard let tempoStart = xmlString.range(of: "<Tempo>"),
-              let tempoEnd = xmlString.range(of: "</Tempo>", range: tempoStart.upperBound..<xmlString.endIndex) else {
-            return nil
+    // MARK: Scan loop
+
+    /// Processes all '<' tokens below the carry threshold; returns the index
+    /// up to which the buffer has been fully consumed.
+    private func scan(isFinal: Bool) -> Int {
+        let limit = isFinal ? buffer.count : max(0, buffer.count - Self.lookahead)
+        guard limit > 0 else { return 0 }
+
+        buffer.withUnsafeBufferPointer { buf in
+            guard let base = buf.baseAddress else { return }
+            let end = buf.count
+            var i = 0
+            while i < limit {
+                let searchStart = UnsafeRawPointer(base + i)
+                guard let found = memchr(searchStart, 0x3C, limit - i) else { break }
+                let token = i + (UnsafeRawPointer(found) - searchStart)
+                processToken(base, token, end)
+                i = token + 1
+            }
         }
-
-        let tempoBlock = xmlString[tempoStart.lowerBound..<tempoEnd.upperBound]
-
-        // Fast string-based extraction without regex
-        guard let manualStart = tempoBlock.range(of: "<Manual Value=\""),
-              let manualEnd = tempoBlock.range(of: "\"", range: manualStart.upperBound..<tempoBlock.endIndex) else {
-            return nil
-        }
-
-        return Double(tempoBlock[manualStart.upperBound..<manualEnd.lowerBound])
+        return limit
     }
 
-    private nonisolated func extractFirstDouble(from string: String, regex: NSRegularExpression) -> Double? {
-        let range = NSRange(string.startIndex..., in: string)
-        guard let match = regex.firstMatch(in: string, options: [], range: range),
-              match.numberOfRanges > 1,
-              let valueRange = Range(match.range(at: 1), in: string) else {
-            return nil
+    private func processToken(_ buf: UnsafePointer<UInt8>, _ t: Int, _ end: Int) {
+        // This token is "the tag after <TimeSignature>" for a pending signature.
+        if timeSignaturePending {
+            timeSignaturePending = false
+            examineTimeSignatureTag(buf, t, end)
         }
-        return Double(string[valueRange])
+
+        // Scale sequence advances (or resets) on every tag.
+        switch scaleState {
+        case .none:
+            break
+        case .expectRoot:
+            scaleState = .none
+            if match(buf, t, end, "<Root Value=\""),
+               let (value, _) = quotedValue(buf, t + 13, end),
+               let root = Int(value) {
+                scaleState = .expectName(root: root)
+            }
+        case .expectName(let root):
+            scaleState = .none
+            if match(buf, t, end, "<Name Value=\""),
+               let (value, _) = quotedValue(buf, t + 13, end),
+               let scaleName = Int(value),
+               musicalKeys.count < Self.maxKeys,
+               let key = formatMusicalKey(root: root, scaleName: scaleName) {
+                musicalKeys.insert(key)
+            }
+            // Fall through: the same <Name ...> token may also be a sample/plugin name
+        }
+
+        guard t + 1 < end else { return }
+
+        switch buf[t + 1] {
+        case UInt8(ascii: "A"):
+            if match(buf, t, end, "<AudioTrack Id=") {
+                result.audioTrackCount += 1
+            } else if match(buf, t, end, "<AuPluginInfo") {
+                pendingPlugin = .au
+                pendingPluginDeadline = processedOffset + t + Self.pluginNameWindow
+            }
+
+        case UInt8(ascii: "C"):
+            if currentEndBeats == nil, match(buf, t, end, "<CurrentEnd Value=\""),
+               let (value, _) = quotedValue(buf, t + 19, end) {
+                currentEndBeats = Double(value)
+            }
+
+        case UInt8(ascii: "F"):
+            if match(buf, t, end, "<FileRef"),
+               inSampleRef, !sampleRefHadFileRef,
+               result.sampleFileReferences.count < Self.maxReferences {
+                inFileRef = true
+                sampleRefHadFileRef = true
+                pendingAbsolutePath = nil
+                pendingRelativePath = nil
+            }
+
+        case UInt8(ascii: "M"):
+            if match(buf, t, end, "<MidiTrack Id=") {
+                result.midiTrackCount += 1
+            } else if inTempo, !bpmFound, match(buf, t, end, "<Manual Value=\""),
+                      let (value, _) = quotedValue(buf, t + 15, end) {
+                result.bpm = Double(value)
+                bpmFound = true
+                inTempo = false
+            }
+
+        case UInt8(ascii: "N"):
+            if match(buf, t, end, "<Name Value=\""),
+               let (value, _) = quotedValue(buf, t + 13, end) {
+                handleNameValue(value, at: processedOffset + t)
+            }
+
+        case UInt8(ascii: "P"):
+            if match(buf, t, end, "<PlugName Value=\"") {
+                if let (value, _) = quotedValue(buf, t + 17, end) {
+                    if isThirdPartyPlugin(value), pluginNames.count < Self.maxPlugins {
+                        pluginNames.insert(value)
+                    }
+                    if case .vst2 = pendingPlugin {
+                        pendingPlugin = nil
+                    }
+                }
+            } else if inFileRef, pendingAbsolutePath == nil, match(buf, t, end, "<Path Value=\""),
+                      let (value, _) = quotedValue(buf, t + 13, end) {
+                let unescaped = unescapeXMLEntities(value)
+                pendingAbsolutePath = unescaped.isEmpty ? nil : unescaped
+            }
+
+        case UInt8(ascii: "R"):
+            if match(buf, t, end, "<ReturnTrack Id=") {
+                result.returnTrackCount += 1
+            } else if inFileRef, pendingRelativePath == nil, match(buf, t, end, "<RelativePath Value=\""),
+                      let (value, _) = quotedValue(buf, t + 21, end) {
+                let unescaped = unescapeXMLEntities(value)
+                pendingRelativePath = unescaped.isEmpty ? nil : unescaped
+            }
+
+        case UInt8(ascii: "S"):
+            if match(buf, t, end, "<SampleRef>") {
+                if inFileRef { emitFileReference() }
+                inSampleRef = true
+                sampleRefHadFileRef = false
+            } else if match(buf, t, end, "<ScaleInformation>") {
+                scaleState = .expectRoot
+            }
+
+        case UInt8(ascii: "T"):
+            if match(buf, t, end, "<Tempo>") {
+                if !bpmFound { inTempo = true }
+            } else if match(buf, t, end, "<TimeSignature>") {
+                if result.timeSignatureNumerator == nil || result.timeSignatureDenominator == nil {
+                    timeSignaturePending = true
+                }
+            }
+
+        case UInt8(ascii: "V"):
+            if match(buf, t, end, "<Vst3PluginInfo") {
+                pendingPlugin = .vst3
+                pendingPluginDeadline = processedOffset + t + Self.pluginNameWindow
+            } else if match(buf, t, end, "<VstPluginInfo") {
+                pendingPlugin = .vst2
+                pendingPluginDeadline = processedOffset + t + Self.pluginNameWindow
+            }
+
+        case UInt8(ascii: "/"):
+            if match(buf, t, end, "</Tempo>") {
+                inTempo = false
+            } else if match(buf, t, end, "</FileRef>") {
+                if inFileRef { emitFileReference() }
+            } else if match(buf, t, end, "</SampleRef>") {
+                if inFileRef { emitFileReference() }
+                inSampleRef = false
+            }
+
+        default:
+            break
+        }
     }
 
-    private nonisolated func extractFirstInt(from string: String, regex: NSRegularExpression) -> Int? {
-        let range = NSRange(string.startIndex..., in: string)
-        guard let match = regex.firstMatch(in: string, options: [], range: range),
-              match.numberOfRanges > 1,
-              let valueRange = Range(match.range(at: 1), in: string) else {
-            return nil
-        }
-        return Int(string[valueRange])
-    }
-
-    private nonisolated func extractSampleNames(from xmlString: String) -> [String] {
-        var names: Set<String> = []
-
-        let range = NSRange(xmlString.startIndex..., in: xmlString)
-        let matches = ALSRegex.sampleName.matches(in: xmlString, options: [], range: range)
-
-        for match in matches.prefix(500) { // Limit to first 500 samples
-            if let valueRange = Range(match.range(at: 1), in: xmlString) {
-                names.insert(String(xmlString[valueRange]))
+    /// A `<Name Value="...">` serves several masters: the plugin name following
+    /// an AU/VST3 info tag, and audio-extension names counted as samples.
+    private func handleNameValue(_ value: String, at absoluteOffset: Int) {
+        if let pending = pendingPlugin, pending != .vst2 {
+            pendingPlugin = nil
+            if absoluteOffset <= pendingPluginDeadline,
+               isThirdPartyPlugin(value), pluginNames.count < Self.maxPlugins {
+                pluginNames.insert(value)
             }
         }
 
-        return Array(names).sorted()
-    }
-
-    /// Extracts sample file references from `<FileRef>` blocks.
-    /// Handles the modern (Live 10/11/12) attribute form:
-    ///   `<FileRef>...<RelativePath Value="Samples/x.wav" />...<Path Value="/abs/x.wav" />...</FileRef>`
-    /// Older formats that store the path as nested elements yield no attribute
-    /// matches and are simply skipped (name-based extraction still covers them).
-    private nonisolated func extractSampleFileReferences(from xmlString: String) -> [SampleFileReference] {
-        var references: [SampleFileReference] = []
-        var seen: Set<SampleFileReference> = []
-        var searchStart = xmlString.startIndex
-
-        // Only look at <FileRef> blocks inside <SampleRef> containers. Live uses
-        // FileRef for many non-sample things — device/VST preset paths, skin files,
-        // OriginalFileRef history — and stale preset paths are extremely common in
-        // healthy sets, so scanning every FileRef produces false "missing samples".
-        while references.count < 500, // Same cap as sample name extraction
-              let sampleRefOpen = xmlString.range(of: "<SampleRef>", range: searchStart..<xmlString.endIndex) {
-            let sampleRefEnd = xmlString.range(of: "</SampleRef>", range: sampleRefOpen.upperBound..<xmlString.endIndex)?.lowerBound
-                ?? xmlString.index(sampleRefOpen.upperBound, offsetBy: 4000, limitedBy: xmlString.endIndex)
-                ?? xmlString.endIndex
-            searchStart = sampleRefEnd
-
-            guard let fileRefOpen = xmlString.range(of: "<FileRef", range: sampleRefOpen.upperBound..<sampleRefEnd) else {
-                continue
-            }
-            let blockEnd = xmlString.range(of: "</FileRef>", range: fileRefOpen.upperBound..<sampleRefEnd)?.lowerBound
-                ?? sampleRefEnd
-
-            let block = xmlString[fileRefOpen.upperBound..<blockEnd]
-            let absolutePath = extractAttributeValue(in: block, afterTag: "<Path Value=\"")
-            let relativePath = extractAttributeValue(in: block, afterTag: "<RelativePath Value=\"")
-
-            guard absolutePath != nil || relativePath != nil else { continue }
-
-            let reference = SampleFileReference(absolutePath: absolutePath, relativePath: relativePath)
-            if seen.insert(reference).inserted {
-                references.append(reference)
-            }
+        if sampleNames.count < Self.maxSampleNames, hasAudioExtension(value) {
+            sampleNames.insert(value)
         }
-
-        return references
     }
 
-    /// Returns the attribute value following `tag` within `block`, XML-unescaped.
-    /// Returns nil when the tag is absent or the value is empty.
-    private nonisolated func extractAttributeValue(in block: Substring, afterTag tag: String) -> String? {
-        guard let start = block.range(of: tag),
-              let end = block.range(of: "\"", range: start.upperBound..<block.endIndex) else {
+    private static let audioExtensions = [".wav", ".aif", ".aiff", ".mp3", ".flac", ".m4a"]
+
+    private func hasAudioExtension(_ name: String) -> Bool {
+        let lowered = name.lowercased()
+        return Self.audioExtensions.contains { ext in
+            lowered.hasSuffix(ext) && lowered.count > ext.count
+        }
+    }
+
+    private func emitFileReference() {
+        inFileRef = false
+        guard pendingAbsolutePath != nil || pendingRelativePath != nil else { return }
+        let reference = SampleFileReference(
+            absolutePath: pendingAbsolutePath,
+            relativePath: pendingRelativePath
+        )
+        pendingAbsolutePath = nil
+        pendingRelativePath = nil
+        if seenReferences.insert(reference).inserted {
+            result.sampleFileReferences.append(reference)
+        }
+    }
+
+    /// The tag at `t` follows a `<TimeSignature>`; its attributes carry the
+    /// numerator/denominator (e.g. `<RemoteableTimeSignature Numerator Value="4" ...>`
+    /// or separate `<...Numerator Value="4">` tags on older versions).
+    private func examineTimeSignatureTag(_ buf: UnsafePointer<UInt8>, _ t: Int, _ end: Int) {
+        let searchLimit = min(end, t + 512)
+        guard let close = find(">", in: buf, t, searchLimit) else { return }
+
+        if result.timeSignatureNumerator == nil,
+           let numStart = find("Numerator Value=\"", in: buf, t, close),
+           let (value, _) = quotedValue(buf, numStart, close),
+           let numerator = Int(value) {
+            result.timeSignatureNumerator = numerator
+        }
+        if result.timeSignatureDenominator == nil,
+           let denStart = find("Denominator Value=\"", in: buf, t, close),
+           let (value, _) = quotedValue(buf, denStart, close),
+           let denominator = Int(value) {
+            result.timeSignatureDenominator = denominator
+        }
+    }
+
+    // MARK: Byte matching helpers
+
+    /// True when the bytes at `i` are exactly `pattern`.
+    private func match(_ buf: UnsafePointer<UInt8>, _ i: Int, _ end: Int, _ pattern: StaticString) -> Bool {
+        let length = pattern.utf8CodeUnitCount
+        guard i + length <= end else { return false }
+        return pattern.withUTF8Buffer { patternBuf in
+            memcmp(buf + i, patternBuf.baseAddress!, length) == 0
+        }
+    }
+
+    /// First occurrence of `pattern` in buf[start..<end], returning the index
+    /// just past the pattern (i.e. where a value capture would begin).
+    private func find(_ pattern: StaticString, in buf: UnsafePointer<UInt8>, _ start: Int, _ end: Int) -> Int? {
+        let length = pattern.utf8CodeUnitCount
+        guard length > 0, end - start >= length else { return nil }
+        return pattern.withUTF8Buffer { patternBuf in
+            let first = patternBuf[0]
+            var i = start
+            while i <= end - length {
+                let searchStart = UnsafeRawPointer(buf + i)
+                guard let found = memchr(searchStart, Int32(first), end - length - i + 1) else { return nil }
+                let candidate = i + (UnsafeRawPointer(found) - searchStart)
+                if memcmp(buf + candidate, patternBuf.baseAddress!, length) == 0 {
+                    return candidate + length
+                }
+                i = candidate + 1
+            }
             return nil
         }
-        let value = unescapeXMLEntities(String(block[start.upperBound..<end.lowerBound]))
-        return value.isEmpty ? nil : value
     }
+
+    /// The value bytes from `from` up to the next '"', as a String.
+    /// nil when no closing quote is found within bounds (or within 8KB).
+    private func quotedValue(_ buf: UnsafePointer<UInt8>, _ from: Int, _ end: Int) -> (String, Int)? {
+        let maxLength = min(end - from, 8192)
+        guard maxLength > 0 else { return nil }
+        let searchStart = UnsafeRawPointer(buf + from)
+        guard let found = memchr(searchStart, 0x22, maxLength) else { return nil }
+        let quoteIndex = from + (UnsafeRawPointer(found) - searchStart)
+        let value = String(decoding: UnsafeBufferPointer(start: buf + from, count: quoteIndex - from), as: UTF8.self)
+        return (value, quoteIndex + 1)
+    }
+
+    // MARK: Value helpers
 
     /// Decodes the five predefined XML entities (paths may contain & or ')
-    private nonisolated func unescapeXMLEntities(_ string: String) -> String {
+    private func unescapeXMLEntities(_ string: String) -> String {
         guard string.contains("&") else { return string }
         return string
             .replacingOccurrences(of: "&lt;", with: "<")
@@ -429,79 +631,12 @@ struct ALSParser: Sendable {
             .replacingOccurrences(of: "&amp;", with: "&")
     }
 
-    private nonisolated func extractPlugins(from xmlString: String) -> [String] {
-        var plugins: Set<String> = []
-
-        // Ableton 12.x: AU plugins — find <AuPluginInfo then <Name Value="..."/> nearby
-        extractPluginsByTag(from: xmlString, openTag: "<AuPluginInfo", nameTag: "<Name Value=\"", into: &plugins)
-
-        // Ableton 12.x: VST3 plugins — find <Vst3PluginInfo then <Name Value="..."/> nearby
-        extractPluginsByTag(from: xmlString, openTag: "<Vst3PluginInfo", nameTag: "<Name Value=\"", into: &plugins)
-
-        // Older Ableton / VST2: <VstPluginInfo then <PlugName Value="..."/>
-        extractPluginsByTag(from: xmlString, openTag: "<VstPluginInfo", nameTag: "<PlugName Value=\"", into: &plugins)
-
-        // Fallback: top-level <PlugName Value="..."/> (older format)
-        extractPluginsByTag(from: xmlString, openTag: "<PlugName Value=\"", nameTag: nil, into: &plugins)
-
-        return Array(plugins).sorted()
-    }
-
-    /// Fast string-search plugin extraction — no expensive multiline regex
-    private nonisolated func extractPluginsByTag(
-        from xmlString: String,
-        openTag: String,
-        nameTag: String?,
-        into plugins: inout Set<String>
-    ) {
-        var searchStart = xmlString.startIndex
-
-        for _ in 0..<200 { // Safety limit
-            guard let tagRange = xmlString.range(of: openTag, range: searchStart..<xmlString.endIndex) else {
-                break
-            }
-
-            searchStart = tagRange.upperBound
-
-            if let nameTag = nameTag {
-                // Search for the name tag within the next 2000 characters of the block
-                let searchEnd = xmlString.index(tagRange.upperBound, offsetBy: 2000, limitedBy: xmlString.endIndex) ?? xmlString.endIndex
-                guard let nameStart = xmlString.range(of: nameTag, range: tagRange.upperBound..<searchEnd) else {
-                    continue
-                }
-
-                // Extract value between quotes
-                let valueStart = nameStart.upperBound
-                guard let quoteEnd = xmlString.range(of: "\"", range: valueStart..<searchEnd) else {
-                    continue
-                }
-
-                let name = String(xmlString[valueStart..<quoteEnd.lowerBound])
-                if isThirdPartyPlugin(name) {
-                    plugins.insert(name)
-                }
-            } else {
-                // The openTag itself contains the value (e.g. <PlugName Value="...)
-                let valueStart = tagRange.upperBound
-                let searchEnd = xmlString.index(valueStart, offsetBy: 200, limitedBy: xmlString.endIndex) ?? xmlString.endIndex
-                guard let quoteEnd = xmlString.range(of: "\"", range: valueStart..<searchEnd) else {
-                    continue
-                }
-
-                let name = String(xmlString[valueStart..<quoteEnd.lowerBound])
-                if isThirdPartyPlugin(name) {
-                    plugins.insert(name)
-                }
-            }
-        }
-    }
-
-    private nonisolated func isThirdPartyPlugin(_ name: String) -> Bool {
+    private func isThirdPartyPlugin(_ name: String) -> Bool {
         guard !name.isEmpty, name != "None" else { return false }
         return !isBuiltInDevice(name)
     }
 
-    private nonisolated func isBuiltInDevice(_ name: String) -> Bool {
+    private func isBuiltInDevice(_ name: String) -> Bool {
         let prefixes = ["Ableton", "Audio", "Auto", "Beat", "Corpus", "Delay", "Drum",
                         "EQ", "External", "Filter", "Flanger", "Gate", "Glue", "Grain",
                         "Limiter", "Looper", "MIDI", "Multiband", "Overdrive", "Pedal",
@@ -511,30 +646,7 @@ struct ALSParser: Sendable {
         return prefixes.contains { name.hasPrefix($0) }
     }
 
-    private nonisolated func extractMusicalKeys(from xmlString: String) -> [String] {
-        var keys: Set<String> = []
-
-        let range = NSRange(xmlString.startIndex..., in: xmlString)
-        let matches = ALSRegex.musicalKey.matches(in: xmlString, options: [], range: range)
-
-        for match in matches.prefix(100) { // Limit to avoid performance issues
-            guard match.numberOfRanges >= 3,
-                  let rootRange = Range(match.range(at: 1), in: xmlString),
-                  let nameRange = Range(match.range(at: 2), in: xmlString),
-                  let root = Int(xmlString[rootRange]),
-                  let scaleName = Int(xmlString[nameRange]) else {
-                continue
-            }
-
-            if let keyString = formatMusicalKey(root: root, scaleName: scaleName) {
-                keys.insert(keyString)
-            }
-        }
-
-        return Array(keys).sorted()
-    }
-
-    private nonisolated func formatMusicalKey(root: Int, scaleName: Int) -> String? {
+    private func formatMusicalKey(root: Int, scaleName: Int) -> String? {
         let noteNames = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
         let scaleNames = [
             "Major", "Minor", "Dorian", "Mixolydian", "Lydian", "Phrygian", "Locrian",
