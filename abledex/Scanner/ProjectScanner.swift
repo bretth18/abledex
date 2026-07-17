@@ -51,11 +51,10 @@ private actor ScanCoordinator {
     }
 }
 
-// nonisolated + @concurrent entry points: this module defaults to MainActor
-// isolation, and NonisolatedNonsendingByDefault means a plain nonisolated async
-// function still runs on the CALLER's actor. Scans are always started from the
-// main actor, so without @concurrent the whole scan — including the synchronous
-// filesystem crawl — would execute on the main thread and freeze the UI.
+// This module defaults to MainActor isolation, and under
+// NonisolatedNonsendingByDefault a plain nonisolated async function still runs
+// on the CALLER's actor — the @concurrent entry points are what actually keep
+// the crawl and parsing off the main thread.
 nonisolated final class ProjectScanner: Sendable {
     private let database: AppDatabase
     private let crawler = FileSystemCrawler()
@@ -73,8 +72,7 @@ nonisolated final class ProjectScanner: Sendable {
         return try await scanLocations(locations, forceReparse: forceReparse, progress: progress)
     }
 
-    /// Scans the given locations in parallel (subset scans let launch index
-    /// only the locations that journal replay can't cover).
+    /// Scans the given locations in parallel.
     @concurrent
     func scanLocations(
         _ locationsToScan: [LocationRecord],
@@ -122,11 +120,10 @@ nonisolated final class ProjectScanner: Sendable {
         try await scanLocation(location, forceReparse: forceReparse, coordinator: nil, progress: progress)
     }
 
-    /// Parse workers per location. Bounds peak memory (each in-flight parse holds
-    /// one decompressed project) while keeping the CPU busy alongside disk crawling.
+    /// Parse workers per location — bounds peak memory per in-flight parse.
     private static let parseConcurrency = max(2, min(6, ProcessInfo.processInfo.activeProcessorCount - 2))
 
-    /// How many parsed records accumulate before a database write.
+    /// Parsed records accumulated per database write.
     private static let saveChunkSize = 50
 
     @concurrent
@@ -146,13 +143,10 @@ nonisolated final class ProjectScanner: Sendable {
             return 0
         }
 
-        // One indexed snapshot of everything under this location: consulted to
-        // skip unchanged files and, after a complete crawl, to prune records
-        // whose files no longer exist.
+        // Consulted to skip unchanged files and, after a complete crawl, to
+        // prune records whose files no longer exist.
         let existingByPath = try await database.fetchProjects(underPath: location.path)
 
-        // Discovery streams into a bounded pool of parse workers, so parsing
-        // starts with the first discovered file instead of after the full crawl.
         let (discoveries, continuation) = AsyncStream.makeStream(of: DiscoveredProject.self)
 
         var discoveredPaths = Set<String>()
@@ -166,8 +160,6 @@ nonisolated final class ProjectScanner: Sendable {
                 }
             }
 
-            // Dispatcher: consumes discoveries, keeps at most parseConcurrency
-            // parses in flight, and flushes results to the DB in chunks.
             try await withThrowingTaskGroup(of: ProjectRecord?.self) { parsers in
                 var inFlight = 0
                 var pendingSave: [ProjectRecord] = []
@@ -186,7 +178,6 @@ nonisolated final class ProjectScanner: Sendable {
                             pendingSave = []
                             try await self.database.saveProjects(chunk)
                         }
-                        // Throttle progress: at most ~4 updates/second
                         let now = ContinuousClock.now
                         if now - lastProgressUpdate > .milliseconds(250) {
                             lastProgressUpdate = now
@@ -200,22 +191,19 @@ nonisolated final class ProjectScanner: Sendable {
                     let path = discovered.alsFilePath.path
                     discoveredPaths.insert(path)
 
-                    // Overlapping locations discover the same files; only the
-                    // location that claims a path first parses it. Unclaimed
-                    // files still count as discovered so pruning ignores them.
+                    // Only the location that claims a path first parses it;
+                    // unclaimed files still count as discovered so pruning
+                    // ignores them.
                     if let coordinator {
                         guard await coordinator.claim([path]).contains(path) else { continue }
                     }
 
                     let existing = existingByPath[path]
 
-                    // Skip files that haven't changed since last index (same mtime
-                    // AND same size — sync/restore tools can preserve timestamps
-                    // while altering content; a nil stored size means a pre-v7 row
-                    // and defers the size check until the next real reparse).
-                    // Exception: records flagged with missing samples are re-verified
-                    // every scan — earlier detection had false positives, and the user
-                    // may have restored the files; either way the flag should self-heal.
+                    // Skip unchanged files: mtime AND size must match (sync tools
+                    // can preserve timestamps while altering content; nil size =
+                    // pre-v7 row, checked after its next reparse). Missing-samples
+                    // records are always re-verified so the flag can self-heal.
                     if !forceReparse,
                        let existing = existing,
                        !existing.hasMissingSamples,
@@ -246,9 +234,8 @@ nonisolated final class ProjectScanner: Sendable {
             try await group.waitForAll()
         }
 
-        // The crawl completed without cancellation, so any indexed file we did
-        // not encounter is gone from disk — remove it. (Projects on offline
-        // volumes are protected by the reachability guard above, not here.)
+        // Complete crawl: any indexed file not encountered is gone from disk.
+        // (Offline volumes are protected by the reachability guard above.)
         let vanished = existingByPath.filter { !discoveredPaths.contains($0.key) }
         if !vanished.isEmpty {
             try await database.deleteProjects(ids: vanished.values.map(\.id))

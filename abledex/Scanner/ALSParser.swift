@@ -91,10 +91,9 @@ nonisolated struct ALSParser: Sendable {
 
     init() {}
 
-    /// Parses an .als file with a single streaming pass: the gzip decompressor
-    /// feeds 64KB chunks straight into a byte scanner, so peak memory per parse
-    /// is a small carry buffer — never the whole decompressed document (large
-    /// sets decompress to 100MB+ of XML, and several parses run concurrently).
+    /// Single streaming pass: gzip chunks feed the byte scanner directly, so
+    /// peak memory is a small carry buffer, never the decompressed document
+    /// (large sets exceed 100MB of XML and several parses run concurrently).
     func parse(alsFilePath: URL) throws -> ParsedProjectData {
         guard FileManager.default.fileExists(atPath: alsFilePath.path) else {
             throw ALSParserError.fileNotFound
@@ -136,8 +135,7 @@ nonisolated struct ALSParser: Sendable {
 
         // Check for gzip magic number
         guard data[0] == 0x1f && data[1] == 0x8b else {
-            // Not gzipped — might be raw XML. Validate encoding here (the test
-            // fixtures use this path); real .als files are always gzipped.
+            // Not gzipped — might be raw XML
             guard String(data: data, encoding: .utf8) != nil else {
                 throw ALSParserError.invalidXML
             }
@@ -242,14 +240,9 @@ nonisolated struct ALSParser: Sendable {
 
 // MARK: - Streaming Byte Scanner
 
-/// Extracts every project metric in ONE pass over the decompressed XML bytes.
-///
-/// The previous implementation materialized the whole document as a String and
-/// ran ~10 independent full-text passes (regex + range(of:)) — on a 100MB set
-/// that meant two full in-memory copies plus a gigabyte of scanning. This
-/// scanner is fed chunk-by-chunk, matches raw UTF-8 bytes, materializes only
-/// captured attribute values, and carries at most `lookahead` bytes between
-/// chunks for tokens that straddle a boundary.
+/// Extracts every project metric in one pass over the decompressed XML bytes,
+/// fed chunk-by-chunk. Only captured attribute values are materialized; at
+/// most `lookahead` bytes carry over between chunks for straddling tokens.
 ///
 /// Attribute values in ALS XML never contain a raw '<' (it is entity-escaped),
 /// so scanning for '<' via memchr never false-positives inside a value.
@@ -279,8 +272,9 @@ private final class ALSStreamScanner {
     // at finish() once BPM is known.
     private var currentEndBeats: Double?
 
-    // Sample references: only <FileRef> blocks inside <SampleRef> count, and
-    // only the first FileRef per SampleRef (matching prior behavior).
+    // Sample references: only <FileRef> blocks inside <SampleRef> count
+    // (Live uses FileRef for presets, skins, and history too), and only the
+    // first FileRef per SampleRef.
     private var inSampleRef = false
     private var sampleRefHadFileRef = false
     private var inFileRef = false
@@ -407,8 +401,7 @@ private final class ALSStreamScanner {
                let key = formatMusicalKey(root: root, scaleName: scaleName) {
                 musicalKeys.insert(key)
             }
-            // Fall through to normal dispatch: the same <Name ...> token is
-            // still checked as a sample/plugin name (prior passes were independent).
+            // Fall through: the same <Name ...> token may also be a sample/plugin name
         }
 
         guard t + 1 < end else { return }

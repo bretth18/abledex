@@ -8,24 +8,16 @@
 import Foundation
 import CoreServices
 
-/// FSEvents wrapper: one instance watches the locations on ONE volume and
-/// delivers file-level events (coalesced by `latency`) plus each batch's last
-/// event ID so the caller can persist replay progress.
+/// One FSEvents stream over one volume's locations. Starting with a persisted
+/// `sinceEventID` replays the journal — including changes made while the app
+/// wasn't running — through the same handler as live events.
 ///
-/// Two stream flavors:
-/// - `.host` for the boot volume: absolute paths, host-global event IDs.
-/// - `.device` for external volumes: created relative to the device, so event
-///   IDs come from the volume's own journal and stay meaningful across
-///   unmount/remount — and across machines. Callers must validate the journal
-///   UUID (`journalUUID(forDevice:)`) before trusting a persisted ID.
+/// `.device` streams take their event IDs from the volume's own journal, so
+/// they stay meaningful across unmount/remount and across machines; callers
+/// must validate `journalUUID(forDevice:)` before trusting a persisted ID.
 ///
-/// Starting a stream with a persisted `sinceEventID` replays the journal —
-/// including changes made while the app wasn't running or the drive was
-/// mounted elsewhere — through the same handler as live events.
-///
-/// @unchecked Sendable: `stream` is only mutated by start()/stop() (called from
-/// the main actor); FSEvents delivers callbacks on the private serial queue and
-/// the callback only reads immutable state.
+/// @unchecked Sendable: `stream` is only mutated by start()/stop() from the
+/// main actor; callbacks arrive on the private queue and read immutable state.
 nonisolated final class FileSystemWatcher: @unchecked Sendable {
     struct Event: Sendable {
         /// Absolute path (device-relative callback paths are translated).

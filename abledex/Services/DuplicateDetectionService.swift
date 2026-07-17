@@ -55,13 +55,9 @@ struct DuplicateDetectionService: Sendable {
             .map { DuplicateGroup(type: .exact, projects: $0) }
     }
 
-    /// Find projects with similar characteristics.
-    ///
-    /// Similarity requires BPM within ±5, so candidates are bucketed by
-    /// truncated BPM and each project is compared only against its own and
-    /// neighboring buckets. A naive all-pairs pass is O(n²) — at 10k+ projects
-    /// that's 10⁸ comparisons on every recompute; bucketing keeps it near-linear
-    /// for real libraries (BPMs cluster, but ±5 windows stay small).
+    /// Find projects with similar characteristics. Similarity requires BPM
+    /// within ±5, so candidates bucket by integer BPM and compare only against
+    /// neighboring buckets — near-linear instead of all-pairs O(n²).
     private func findSimilarProjects(in projects: [ProjectRecord]) -> [DuplicateGroup] {
         // Pre-decode all plugin sets once to avoid repeated JSON decoding + lock contention
         var pluginSetsById: [UUID: Set<String>] = [:]
@@ -73,11 +69,10 @@ struct DuplicateDetectionService: Sendable {
             }
         }
 
-        // Only projects that can possibly match: similarity needs a BPM and plugins.
+        // Similarity needs a BPM and plugins
         let candidates = projects.filter { $0.bpm != nil && pluginSetsById[$0.id] != nil }
 
-        // Bucket by integer BPM; a ±5 BPM window spans at most 11 buckets.
-        var buckets: [Int: [Int]] = [:]  // bpm bucket -> indexes into candidates
+        var buckets: [Int: [Int]] = [:]  // integer bpm -> indexes into candidates
         for (index, project) in candidates.enumerated() {
             buckets[Int(project.bpm!), default: []].append(index)
         }

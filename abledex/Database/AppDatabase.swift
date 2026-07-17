@@ -8,9 +8,8 @@
 import Foundation
 import GRDB
 
-// nonisolated: GRDB serializes all access on its own queues; routing these async
-// wrappers through the main actor (the module default) would add a main-thread hop
-// for every batch save the background scanner performs.
+// nonisolated: GRDB serializes access on its own queues; the module's MainActor
+// default would add a main-thread hop to every background scanner save.
 nonisolated final class AppDatabase: Sendable {
     private let dbWriter: any DatabaseWriter
 
@@ -292,9 +291,9 @@ extension AppDatabase {
         }
     }
 
-    /// All indexed projects whose .als file lives under `directoryPath`, keyed by path.
-    /// Uses a range comparison on the unique alsFilePath index ('0' is the character
-    /// after '/'), which stays index-backed and avoids LIKE-escaping issues.
+    /// Indexed projects under `directoryPath`, keyed by path. The range
+    /// comparison ('0' is the character after '/') stays on the alsFilePath
+    /// index and avoids LIKE escaping.
     func fetchProjects(underPath directoryPath: String) async throws -> [String: ProjectRecord] {
         let prefix = directoryPath.hasSuffix("/") ? directoryPath : directoryPath + "/"
         let upperBound = String(prefix.dropLast()) + "0"
@@ -322,9 +321,8 @@ extension AppDatabase {
         }
     }
 
-    /// IDs of projects whose indexed text matches `query` (prefix-tokenized, so
-    /// search-as-you-type works). Returns nil when the query yields no valid
-    /// FTS pattern — callers should fall back to their own matching then.
+    /// IDs of projects matching `query` (prefix-tokenized for search-as-you-type).
+    /// nil when the query yields no valid FTS pattern — callers fall back then.
     func searchProjectIDs(matching query: String) async throws -> Set<UUID>? {
         guard let pattern = FTS5Pattern(matchingAllPrefixesIn: query) else { return nil }
         return try await dbWriter.read { db in

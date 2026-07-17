@@ -17,9 +17,8 @@ nonisolated struct DiscoveredProject: Sendable {
     let fileSize: Int64?
 }
 
-// nonisolated: the crawl must be callable from the scanner's background context.
-// Under this module's MainActor default isolation, an unannotated type would pin
-// the synchronous full-disk enumeration to the main thread.
+// nonisolated: under the module's MainActor default isolation, an unannotated
+// type would pin the synchronous crawl to the main thread.
 nonisolated struct FileSystemCrawler: Sendable {
 
     /// Directory names whose entire subtrees are skipped during crawling.
@@ -41,9 +40,8 @@ nonisolated struct FileSystemCrawler: Sendable {
         return containsALS
     }
 
-    /// Crawls `directory` for .als project files, returning the full list.
-    /// Prefer `enumerateProjects(in:onDiscover:)` for large trees — it lets the
-    /// caller start parsing while the crawl is still running.
+    /// Crawls `directory` for .als project files. Prefer the streaming
+    /// `enumerateProjects(in:onDiscover:)` for large trees.
     func findProjects(in directory: URL) throws -> [DiscoveredProject] {
         var projects: [DiscoveredProject] = []
         try enumerateProjects(in: directory) { projects.append($0) }

@@ -51,8 +51,6 @@ struct AbledexApp: App {
                     await appState.loadData()
                     appState.startVolumeMonitoring()
 
-                    // Replays FSEvents history when the library was fully
-                    // indexed before (no crawl); full scan otherwise.
                     await appState.startAutomaticIndexing()
                 }
         }
