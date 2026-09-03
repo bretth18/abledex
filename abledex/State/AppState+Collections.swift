@@ -47,6 +47,39 @@ extension AppState {
         return collections.first { $0.id == id }
     }
 
+    /// The tracks of a music project, in running order. Projects with no
+    /// recorded position sort last, alphabetically, so a collection reads
+    /// sensibly before anyone has arranged it.
+    func projectsInCollection(_ collection: CollectionRecord) -> [ProjectRecord] {
+        projects
+            .filter { $0.collectionID == collection.id }
+            .sorted { lhs, rhs in
+                switch (lhs.collectionPosition, rhs.collectionPosition) {
+                case let (left?, right?): return left < right
+                case (nil, _?): return false
+                case (_?, nil): return true
+                case (nil, nil): return lhs.name.localizedCompare(rhs.name) == .orderedAscending
+                }
+            }
+    }
+
+    /// Persists a new running order for a music project.
+    func reorderCollection(_ collection: CollectionRecord, to ordered: [ProjectRecord]) async throws {
+        try await database.setCollectionOrder(ids: ordered.map(\.id))
+    }
+
+    /// Aggregate figures for the release page header.
+    func collectionSummary(_ collection: CollectionRecord) -> CollectionSummary {
+        let tracks = projectsInCollection(collection)
+        let bpms = tracks.compactMap(\.bpm)
+        return CollectionSummary(
+            trackCount: tracks.count,
+            doneCount: tracks.count { $0.completionStatus == .done },
+            totalDuration: tracks.compactMap(\.duration).reduce(0, +),
+            averageBPM: bpms.isEmpty ? nil : bpms.reduce(0, +) / Double(bpms.count)
+        )
+    }
+
     /// Progress of a music project: how many member tracks are Done out of the total.
     func collectionProgress(_ collection: CollectionRecord) -> (done: Int, total: Int) {
         (collectionDoneCounts[collection.id] ?? 0, collectionCounts[collection.id] ?? 0)
@@ -56,4 +89,22 @@ extension AppState {
         collections.sort { $0.name.localizedCompare($1.name) == .orderedAscending }
     }
 
+}
+
+/// Aggregate figures shown on a music project's release page.
+struct CollectionSummary {
+    var trackCount: Int
+    var doneCount: Int
+    var totalDuration: Double
+    var averageBPM: Double?
+
+    var formattedDuration: String {
+        let total = Int(totalDuration)
+        let hours = total / 3600
+        let minutes = (total % 3600) / 60
+        let seconds = total % 60
+        return hours > 0
+            ? String(format: "%d:%02d:%02d", hours, minutes, seconds)
+            : String(format: "%d:%02d", minutes, seconds)
+    }
 }

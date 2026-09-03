@@ -155,6 +155,8 @@ struct ProjectRecord: Codable, Sendable, Identifiable, Equatable, FetchableRecor
 
     // Music project (EP/album) this project belongs to, if any
     var collectionID: UUID? = nil
+    // Track order within that music project; nil sorts last
+    var collectionPosition: Int? = nil
 
     enum Columns: String, ColumnExpression {
         case id
@@ -189,6 +191,7 @@ struct ProjectRecord: Codable, Sendable, Identifiable, Equatable, FetchableRecor
         case isFavorite
         case lastOpenedAt
         case collectionID
+        case collectionPosition
     }
 }
 

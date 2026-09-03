@@ -12,6 +12,8 @@ struct ContentView: View {
     @Environment(\.theme) private var theme
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showStatistics = false
+    /// Collections open on their release page; this switches back to the table.
+    @State private var showsCollectionTable = false
 
     var body: some View {
         @Bindable var state = appState
@@ -21,15 +23,17 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 300)
         } content: {
             VStack(spacing: 0) {
-                if let collection = activeCollection {
-                    CollectionHeaderView(collection: collection)
-                }
-
-                if appState.useNSTableView {
+                if let collection = activeCollection, !showsCollectionTable {
+                    CollectionDetailView(collection: collection)
+                } else if appState.useNSTableView {
                     ProjectNSTableWrapperView()
                 } else {
                     ProjectTableView()
                 }
+            }
+            .onChange(of: appState.selectedCollectionFilter) {
+                // A newly opened collection always lands on its release page.
+                showsCollectionTable = false
             }
             .navigationSplitViewColumnWidth(min: 400, ideal: 600)
                 .navigationTitle(navigationTitle)
@@ -49,6 +53,15 @@ struct ContentView: View {
                         }
                         .help(appState.useNSTableView ? "Using NSTableView (AppKit) — click to switch to SwiftUI" : "Using SwiftUI Table — click to switch to NSTableView (AppKit)")
                         #endif
+
+                        if activeCollection != nil {
+                            Picker("View", selection: $showsCollectionTable) {
+                                Image(systemName: "list.number").tag(false)
+                                Image(systemName: "tablecells").tag(true)
+                            }
+                            .pickerStyle(.segmented)
+                            .help(showsCollectionTable ? "Showing the table" : "Showing the release page")
+                        }
 
                         Button {
                             showStatistics = true

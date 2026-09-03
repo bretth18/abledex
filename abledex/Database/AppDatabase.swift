@@ -150,6 +150,14 @@ nonisolated final class AppDatabase: Sendable {
             }
         }
 
+        migrator.registerMigration("v8") { db in
+            // Track order within a music project. NULL sorts last, so projects
+            // added before this migration keep their name ordering until moved.
+            try db.alter(table: "projects") { t in
+                t.add(column: "collectionPosition", .integer)
+            }
+        }
+
         return migrator
     }
 }
@@ -349,7 +357,7 @@ extension AppDatabase {
     func deleteCollection(id: UUID) async throws {
         try await dbWriter.write { db in
             try db.execute(
-                sql: "UPDATE projects SET collectionID = NULL WHERE collectionID = ?",
+                sql: "UPDATE projects SET collectionID = NULL, collectionPosition = NULL WHERE collectionID = ?",
                 arguments: [id]
             )
             _ = try CollectionRecord.filter(CollectionRecord.Columns.id == id).deleteAll(db)
@@ -362,6 +370,19 @@ extension AppDatabase {
         }
     }
 
+    /// Writes the given order as collectionPosition, 0-based.
+    func setCollectionOrder(ids: [UUID]) async throws {
+        guard !ids.isEmpty else { return }
+        try await dbWriter.write { db in
+            for (position, id) in ids.enumerated() {
+                try db.execute(
+                    sql: "UPDATE projects SET collectionPosition = ? WHERE id = ?",
+                    arguments: [position, id]
+                )
+            }
+        }
+    }
+
     func assignProjects(ids: [UUID], toCollection collectionID: UUID?) async throws {
         guard !ids.isEmpty else { return }
         try await dbWriter.write { db in
@@ -369,7 +390,7 @@ extension AppDatabase {
             var arguments: [(any DatabaseValueConvertible)?] = [collectionID]
             arguments.append(contentsOf: ids)
             try db.execute(
-                sql: "UPDATE projects SET collectionID = ? WHERE id IN (\(placeholders))",
+                sql: "UPDATE projects SET collectionID = ?, collectionPosition = NULL WHERE id IN (\(placeholders))",
                 arguments: StatementArguments(arguments)
             )
         }
