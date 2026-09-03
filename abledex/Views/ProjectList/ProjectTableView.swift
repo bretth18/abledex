@@ -416,8 +416,11 @@ struct ProjectTableView: View {
         if appState.selectedProjectIDs.count > 1 && appState.selectedProjectIDs.contains(project.id) {
             // Multi-selection context menu
             Button("Open \(appState.selectedProjectIDs.count) Projects in Ableton") {
-                for proj in appState.selectedProjects {
-                    appState.openProject(proj)
+                appState.openProjects(appState.selectedProjects)
+            }
+            if appState.abletonInstalls.count > 1 {
+                Menu("Open \(appState.selectedProjectIDs.count) Projects With") {
+                    OpenWithMenuItems(projects: appState.selectedProjects)
                 }
             }
             Button("Reveal \(appState.selectedProjectIDs.count) Projects in Finder") {
@@ -460,6 +463,11 @@ struct ProjectTableView: View {
             // Single selection context menu
             Button("Open in Ableton") {
                 appState.openProject(project)
+            }
+            if appState.abletonInstalls.count > 1 {
+                Menu("Open With") {
+                    OpenWithMenuItems(project: project)
+                }
             }
             Button("Reveal in Finder") {
                 appState.revealProject(project)

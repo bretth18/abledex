@@ -250,6 +250,26 @@ final class AppState {
     // Cached filtered projects
     var cachedFilteredProjects: [ProjectRecord] = []
 
+    // MARK: - Opening in Ableton Live
+
+    /// A project waiting on the user to choose which Live install opens it.
+    struct PendingOpen: Identifiable {
+        let id = UUID()
+        let project: ProjectRecord
+        let installs: [AbletonInstall]
+        /// Further projects to open with the same choice (multi-selection).
+        var additionalProjects: [ProjectRecord] = []
+    }
+
+    var pendingOpen: PendingOpen?
+    /// Last discovered Live installs, cached for menus that need them
+    /// synchronously. Refreshed on every open and by refreshAbletonInstalls().
+    var abletonInstalls: [AbletonInstall] = []
+
+    func refreshAbletonInstalls() async {
+        abletonInstalls = await AbletonInstallFinder.findInstalls()
+    }
+
     // MARK: - Derived-Data Bookkeeping
 
     var isInitialLoad = true

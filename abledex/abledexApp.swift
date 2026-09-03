@@ -50,6 +50,7 @@ struct AbledexApp: App {
                     }
                     await appState.loadData()
                     appState.startVolumeMonitoring()
+                    await appState.refreshAbletonInstalls()
 
                     await appState.startAutomaticIndexing()
                 }

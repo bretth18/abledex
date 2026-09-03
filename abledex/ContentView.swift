@@ -72,6 +72,9 @@ struct ContentView: View {
         .sheet(isPresented: $showStatistics) {
             StatisticsView()
         }
+        .sheet(item: $state.pendingOpen) { pending in
+            OpenWithAbletonSheet(pending: pending)
+        }
         .alert(
             appState.activeError?.title ?? "Something Went Wrong",
             isPresented: Binding(

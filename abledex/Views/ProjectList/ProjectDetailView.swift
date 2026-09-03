@@ -41,6 +41,9 @@ struct ProjectDetailView: View {
         .onAppear {
             editingNotes = project.userNotes ?? ""
         }
+        .task {
+            await appState.refreshAbletonInstalls()
+        }
         .onChange(of: project.id) { oldID, _ in
             // Save pending note edits before switching — silently discarding
             // typed text is the worst kind of data loss.
@@ -179,6 +182,18 @@ struct ProjectDetailView: View {
                 Label("Open", systemImage: "play.fill")
             }
             .buttonStyle(.borderedProminent)
+
+            if appState.abletonInstalls.count > 1 {
+                Menu {
+                    OpenWithMenuItems(project: project)
+                } label: {
+                    Label("Open With", systemImage: "chevron.down")
+                        .labelStyle(.iconOnly)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Open with a specific version of Live")
+            }
 
             Button {
                 appState.revealProject(project)

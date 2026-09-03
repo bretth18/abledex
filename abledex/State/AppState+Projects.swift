@@ -9,33 +9,116 @@ import AppKit
 extension AppState {
     // MARK: - Project Actions
 
-    func openProject(_ project: ProjectRecord) {
-        // Judge reachability by the file itself, not the offline flag — volumes
-        // mounted outside /Volumes (network shares, secondary APFS volumes) are
-        // reachable even when no /Volumes/<name> mount point exists.
-        guard FileManager.default.fileExists(atPath: project.alsFilePath) else {
-            let message = isVolumeOnline(project)
-                ? "\"\(project.name)\" could not be found at \(project.alsFilePath). It may have been moved or deleted — try re-scanning."
-                : "\"\(project.name)\" is on \"\(project.sourceVolume)\", which isn't currently mounted. Connect the drive and try again."
-            activeError = UserFacingError(title: "Project Not Available", message: message)
+    /// Opens a project in Live. With more than one Live installed, this either
+    /// uses the remembered install or asks which one to use; `install`
+    /// overrides both for a one-off open.
+    func openProject(_ project: ProjectRecord, using install: AbletonInstall? = nil) {
+        guard isProjectReachable(project) else { return }
+
+        if let install {
+            launch(project, with: install)
             return
         }
 
+        Task {
+            let installs = await AbletonInstallFinder.findInstalls()
+            abletonInstalls = installs
+
+            if installs.count <= 1 {
+                // One install (or none — let LaunchServices decide, which may
+                // still find Live somewhere abledex does not look).
+                launch(project, with: installs.first)
+            } else if let remembered = AbletonPreference.rememberedInstall(among: installs) {
+                launch(project, with: remembered)
+            } else {
+                pendingOpen = PendingOpen(project: project, installs: installs)
+            }
+        }
+    }
+
+    /// Opens every selected project, asking at most once which Live to use.
+    func openProjects(_ projectsToOpen: [ProjectRecord]) {
+        guard !projectsToOpen.isEmpty else { return }
+        guard projectsToOpen.count > 1 else {
+            openProject(projectsToOpen[0])
+            return
+        }
+
+        Task {
+            let installs = await AbletonInstallFinder.findInstalls()
+            abletonInstalls = installs
+
+            let reachable = projectsToOpen.filter { FileManager.default.fileExists(atPath: $0.alsFilePath) }
+            guard !reachable.isEmpty else {
+                _ = isProjectReachable(projectsToOpen[0])
+                return
+            }
+
+            if installs.count > 1, AbletonPreference.rememberedInstall(among: installs) == nil {
+                pendingOpen = PendingOpen(project: reachable[0], installs: installs, additionalProjects: Array(reachable.dropFirst()))
+                return
+            }
+
+            let install = AbletonPreference.rememberedInstall(among: installs) ?? installs.first
+            for project in reachable {
+                launch(project, with: install)
+            }
+        }
+    }
+
+    /// Resolves the sheet: opens the pending project (and any queued siblings)
+    /// with `install`, optionally making it the default for future opens.
+    func completePendingOpen(with install: AbletonInstall, remember: Bool) {
+        guard let pending = pendingOpen else { return }
+        pendingOpen = nil
+        if remember {
+            AbletonPreference.remember(install)
+        }
+        launch(pending.project, with: install)
+        for project in pending.additionalProjects {
+            launch(project, with: install)
+        }
+    }
+
+    func cancelPendingOpen() {
+        pendingOpen = nil
+    }
+
+    /// Reports the reachability of a project's .als, surfacing an alert when it
+    /// cannot be opened. Judged by the file itself rather than the offline flag:
+    /// volumes mounted outside /Volumes (network shares, secondary APFS volumes)
+    /// are reachable even with no /Volumes/<name> mount point.
+    private func isProjectReachable(_ project: ProjectRecord) -> Bool {
+        if FileManager.default.fileExists(atPath: project.alsFilePath) { return true }
+        let message = isVolumeOnline(project)
+            ? "\"\(project.name)\" could not be found at \(project.alsFilePath). It may have been moved or deleted. Try re-scanning."
+            : "\"\(project.name)\" is on \"\(project.sourceVolume)\", which isn't currently mounted. Connect the drive and try again."
+        activeError = UserFacingError(title: "Project Not Available", message: message)
+        return false
+    }
+
+    /// Launches `project`, in `install` when one is given and via LaunchServices
+    /// otherwise, then stamps the open time.
+    private func launch(_ project: ProjectRecord, with install: AbletonInstall?) {
         let alsURL = URL(fileURLWithPath: project.alsFilePath)
         let projectID = project.id
+        let configuration = NSWorkspace.OpenConfiguration()
 
         Task {
             do {
-                // Async variant — the sync open() can block the main actor while Live launches
-                try await NSWorkspace.shared.open(alsURL, configuration: NSWorkspace.OpenConfiguration())
+                // Async variants; the sync open() blocks the main actor while Live launches.
+                if let install {
+                    try await NSWorkspace.shared.open([alsURL], withApplicationAt: install.url, configuration: configuration)
+                } else {
+                    try await NSWorkspace.shared.open(alsURL, configuration: configuration)
+                }
             } catch {
                 reportError("Failed to Open Project", error)
                 return
             }
 
-            // Track last opened time on the CURRENT record — Live can take many
-            // seconds to launch, and saving the click-time snapshot would revert
-            // any edits the user made in the meantime.
+            // Stamp the CURRENT record: Live can take many seconds to launch, and
+            // saving the click-time snapshot would revert edits made meanwhile.
             guard let current = projects.first(where: { $0.id == projectID }) else { return }
             var updated = current
             updated.lastOpenedAt = Date()
