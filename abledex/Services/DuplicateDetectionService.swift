@@ -24,7 +24,7 @@ struct DuplicateGroup: Identifiable, Sendable {
     }
 }
 
-struct DuplicateDetectionService: Sendable {
+nonisolated struct DuplicateDetectionService: Sendable {
 
     /// Find all duplicate groups in the given projects
     func findDuplicates(in projects: [ProjectRecord]) -> [DuplicateGroup] {

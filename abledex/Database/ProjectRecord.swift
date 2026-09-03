@@ -338,7 +338,7 @@ extension ProjectRecord {
 
 // MARK: - Camelot Notation Converter
 
-enum CamelotConverter {
+nonisolated enum CamelotConverter {
     // Camelot wheel mapping: key name -> Camelot code
     private static let camelotMap: [String: String] = [
         // Major keys (B column)

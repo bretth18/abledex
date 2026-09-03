@@ -429,7 +429,7 @@ struct StatisticsView: View {
 
 /// All derived statistics for the projects list, computed in a single pass
 /// so the view body only reads precomputed values.
-private struct ProjectStats: Sendable {
+private nonisolated struct ProjectStats: Sendable {
     var averageBPM = "-"
     var totalDuration = "0m"
     var statusData: [(status: CompletionStatus, count: Int)] = []
