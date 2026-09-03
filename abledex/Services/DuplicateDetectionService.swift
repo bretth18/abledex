@@ -57,7 +57,7 @@ nonisolated struct DuplicateDetectionService: Sendable {
 
     /// Find projects with similar characteristics. Similarity requires BPM
     /// within ±5, so candidates bucket by integer BPM and compare only against
-    /// neighboring buckets — near-linear instead of all-pairs O(n²).
+    /// neighboring buckets, making it near-linear instead of all-pairs O(n²).
     private func findSimilarProjects(in projects: [ProjectRecord]) -> [DuplicateGroup] {
         // Pre-decode all plugin sets once to avoid repeated JSON decoding + lock contention
         var pluginSetsById: [UUID: Set<String>] = [:]

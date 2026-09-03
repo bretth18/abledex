@@ -9,8 +9,8 @@ extension AppState {
     // MARK: - Incremental Updates
 
     /// Applies a single-record change without re-aggregating the whole library.
-    /// The `projects` didSet path (full recount + O(n²) duplicate rescheduling)
-    /// is far too expensive for one favorite/status/tag click on a big library.
+    /// The `projects` didSet path does a full recount and reschedules O(n²)
+    /// duplicate detection, which one favorite/status/tag click does not warrant.
     func applyUpdatedProject(_ updated: ProjectRecord) {
         guard let index = projects.firstIndex(where: { $0.id == updated.id }) else { return }
         let old = projects[index]
@@ -22,8 +22,8 @@ extension AppState {
         applyCacheDelta(old: old, new: updated)
         recomputeFilteredProjects()
 
-        // Duplicate detection only depends on hash/BPM/plugins — skip the O(n²)
-        // reschedule for pure metadata edits.
+        // Duplicate detection only depends on hash/BPM/plugins, so pure metadata
+        // edits skip the O(n²) reschedule.
         if old.fileHash != updated.fileHash || old.bpm != updated.bpm || old.pluginsJSON != updated.pluginsJSON {
             scheduleDuplicateRecomputation()
         }
@@ -74,7 +74,7 @@ extension AppState {
             }
         }
 
-        // Folder name only changes on rescan/move — fall back to the full pass then.
+        // Folder name only changes on rescan/move; fall back to the full pass then.
         if old.projectFolderName != new.projectFolderName {
             recomputeCachedCounts()
             return

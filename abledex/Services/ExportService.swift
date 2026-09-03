@@ -10,7 +10,7 @@ import UniformTypeIdentifiers
 @MainActor
 enum ExportService {
     /// Prompts for a destination and writes the given projects as CSV.
-    /// Exports whatever the caller passes — typically the current filtered view.
+    /// Exports whatever the caller passes, typically the current filtered view.
     static func exportCSV(projects: [ProjectRecord]) throws {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.commaSeparatedText]
@@ -33,7 +33,7 @@ enum ExportService {
 
         var lines = [header.map(escape).joined(separator: ",")]
         for project in projects {
-            // Built with appends — a single mixed-expression array literal here
+            // Built with appends: a single mixed-expression array literal here
             // exceeds the CI toolchain's type-check time limit.
             let bpm: String = project.bpm.map { String(format: "%.2f", $0) } ?? ""
             let duration: String = project.duration.map { String(format: "%.1f", $0) } ?? ""

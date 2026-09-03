@@ -221,7 +221,7 @@ struct ProjectNSTableView: NSViewRepresentable {
         }
         // Suppress selection callbacks for the whole reload + selection sync:
         // reloadData() can shrink the row count, and NSTableView then adjusts the
-        // selection and fires the delegate synchronously — writing SwiftUI state
+        // selection and fires the delegate synchronously, so writing SwiftUI state
         // in the middle of this view update. The explicit sync below re-applies
         // the app's selection afterwards.
         coordinator.isSyncingSelection = true
@@ -280,7 +280,7 @@ struct ProjectNSTableView: NSViewRepresentable {
 
     // MARK: - Coordinator
 
-    /// Return opens, Space reveals — parity with the SwiftUI table's onKeyPress
+    /// Return opens, Space reveals, matching the SwiftUI table's onKeyPress
     /// bindings, which never reach an AppKit first responder.
     final class KeyHandlingTableView: NSTableView {
         var onReturnKey: (() -> Bool)?
@@ -710,7 +710,7 @@ struct ProjectNSTableView: NSViewRepresentable {
             let isMulti = selectedRows.count > 1 && selectedRows.contains(clickedRow)
 
             if isMulti {
-                // Snapshot UUIDs now — a scan/reload finishing while the menu is
+                // Snapshot UUIDs now: a scan/reload finishing while the menu is
                 // open replaces currentProjects, and row indexes resolved at click
                 // time would retarget different projects.
                 let selectedIDs = selectedRows.compactMap { index -> UUID? in

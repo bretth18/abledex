@@ -8,7 +8,7 @@ import Foundation
 /// A copy of Ableton Live installed on this machine.
 ///
 /// Every Live build ships the same `com.ableton.live` bundle identifier, so a
-/// beta and a release install are indistinguishable to LaunchServices — it picks
+/// beta and a release install are indistinguishable to LaunchServices: it picks
 /// one and opens every .als with it. Installs are therefore identified by
 /// bundle path, and abledex opens files with an explicit application URL.
 nonisolated struct AbletonInstall: Identifiable, Hashable, Sendable {

@@ -97,7 +97,7 @@ extension AppState {
     }
 
     /// A fresh "consistent as of now" baseline in the volume's own ID space.
-    /// nil when the device's journal isn't available (yet) — a zero ID must
+    /// nil when the device's journal isn't available (yet). A zero ID must
     /// never be persisted or used as sinceWhen, or the stream replays the
     /// volume's entire history.
     func currentBaseline(for target: VolumeWatchTarget) -> FSEventStreamEventId? {
@@ -147,7 +147,7 @@ extension AppState {
         }
     }
 
-    /// (Re)starts one stream per volume — resuming from the stored baseline
+    /// (Re)starts one stream per volume, resuming from the stored baseline
     /// when valid (replays history), else watching from now. No-op for volumes
     /// already watched correctly; streams for vanished volumes stop.
     func ensureFileWatchers() {
@@ -256,7 +256,7 @@ extension AppState {
                 markContainingLocations(of: path)
                 continue
             }
-            // Live's own churn on every save — never affects the index
+            // Live's own churn on every save; never affects the index
             if path.contains("/Backup/") || path.contains("/Trash/") || path.contains("/Ableton Project Info/") {
                 continue
             }
@@ -267,7 +267,7 @@ extension AppState {
                     alsToDelete.append(path)
                 }
             } else if event.isDirectory, event.wasCreated || event.wasRemoved || event.wasRenamed {
-                // Folder moves deliver no per-file events — only a scan can
+                // Folder moves deliver no per-file events; only a scan can
                 // discover (or prune) the projects inside
                 markContainingLocations(of: path)
             }
@@ -309,7 +309,7 @@ extension AppState {
         volumeMonitor?.start()
 
         // DiskArbitration doesn't reliably report Finder ejects (volume unmounted,
-        // device still attached) — the NSWorkspace notifications do.
+        // device still attached). The NSWorkspace notifications do.
         let center = NSWorkspace.shared.notificationCenter
         workspaceObservers.append(center.addObserver(
             forName: NSWorkspace.didMountNotification, object: nil, queue: .main
@@ -344,7 +344,7 @@ extension AppState {
     private func handleVolumeMounted(url: URL, name: String) async {
         offlineVolumeNames.remove(name)
 
-        // Only user-visible drives under /Volumes — NSWorkspace also announces
+        // Only user-visible drives under /Volumes. NSWorkspace also announces
         // simulator disk images and other mounts that never hold projects.
         guard url.path.hasPrefix("/Volumes/") else { return }
 
@@ -352,7 +352,7 @@ extension AppState {
         guard UserDefaults.standard.object(forKey: "scanExternalVolumes") as? Bool ?? true else { return }
 
         // A single physical mount fires both DiskArbitration and NSWorkspace
-        // notifications — without this guard both race saveLocation into a
+        // notifications; without this guard both race saveLocation into a
         // UNIQUE(path) violation and the user gets a spurious error alert.
         guard !mountsBeingHandled.contains(url.path) else { return }
         mountsBeingHandled.insert(url.path)
@@ -367,13 +367,13 @@ extension AppState {
                 _ = await waitForJournal(device: mountStat.st_dev)
             }
             // With a valid baseline the volume's journal replays everything
-            // that changed since last index — no crawl.
+            // that changed since last index, with no crawl.
             let target = volumeWatchTargets().first { $0.paths.contains(existingLocation.path) }
             if existingLocation.lastScannedAt != nil, let target, storedBaseline(for: target) != nil {
                 Self.watchTrace("mount \(name): replaying journal, no scan")
                 ensureFileWatchers()
             } else {
-                Self.watchTrace("mount \(name): no valid baseline (target: \(target != nil), scanned: \(existingLocation.lastScannedAt != nil)) — scanning")
+                Self.watchTrace("mount \(name): no valid baseline (target: \(target != nil), scanned: \(existingLocation.lastScannedAt != nil)); scanning")
                 await startLocationScan(existingLocation, forceReparse: false)
             }
         } else {
@@ -390,8 +390,8 @@ extension AppState {
     }
 
     private func handleVolumeUnmounted(url: URL, name: String) {
-        // Keep the projects indexed — remembering what lives on unplugged drives
-        // is the app's core purpose. Just mark the volume offline.
+        // Keep the projects indexed: remembering what lives on unplugged drives
+        // is the point of the index. Mark the volume offline instead.
         if volumeCounts.keys.contains(name) {
             offlineVolumeNames.insert(name)
         }

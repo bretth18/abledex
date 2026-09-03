@@ -24,7 +24,6 @@ struct StatisticsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                // Header
                 HStack(alignment: .firstTextBaseline) {
                     Text("Stats")
                         .font(.largeTitle.bold())
@@ -41,7 +40,6 @@ struct StatisticsView: View {
                     .buttonStyle(.accessoryBar)
                 }
 
-                // Overview cards
                 LazyVGrid(columns: [
                     GridItem(.flexible()),
                     GridItem(.flexible()),
@@ -63,13 +61,11 @@ struct StatisticsView: View {
 
                 Divider()
 
-                // Status breakdown
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Status Breakdown")
                         .font(.headline)
 
                     HStack(spacing: 24) {
-                        // Chart
                         Chart(stats.statusData, id: \.status) { item in
                             SectorMark(
                                 angle: .value("Count", item.count),
@@ -115,7 +111,6 @@ struct StatisticsView: View {
 
                 Divider()
 
-                // Storage by Volume
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Storage by Volume")
                         .font(.headline)
@@ -169,7 +164,6 @@ struct StatisticsView: View {
 
                 Divider()
 
-                // Key Distribution
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Key Distribution")
                         .font(.headline)
@@ -213,7 +207,6 @@ struct StatisticsView: View {
 
                 Divider()
 
-                // BPM distribution
                 VStack(alignment: .leading, spacing: 12) {
                     Text("BPM Distribution")
                         .font(.headline)
@@ -230,13 +223,11 @@ struct StatisticsView: View {
 
                 Divider()
 
-                // Activity Trends
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Activity Trends")
                         .font(.headline)
 
                     HStack(spacing: 24) {
-                        // Weekly chart
                         VStack(alignment: .leading) {
                             Text("Projects Created (Last 6 Months)")
                                 .font(.subheadline)
@@ -258,7 +249,6 @@ struct StatisticsView: View {
                             .frame(height: 150)
                         }
 
-                        // Day of week breakdown
                         VStack(alignment: .leading, spacing: 8) {
                             Text("By Day of Week")
                                 .font(.subheadline)
@@ -295,7 +285,6 @@ struct StatisticsView: View {
 
                 Divider()
 
-                // Top plugins
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Most Used Plugins")
                         .font(.headline)
@@ -332,7 +321,6 @@ struct StatisticsView: View {
 
                 Divider()
 
-                // Projects over time
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Projects by Month")
                         .font(.headline)

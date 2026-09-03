@@ -10,7 +10,7 @@ extension AppState {
     // MARK: - Data Loading
 
     /// Loads locations/collections and starts the projects observation. The
-    /// projects table is never manually re-fetched — the observation streams
+    /// projects table is never manually re-fetched; the observation streams
     /// every committed change, including each batch a running scan saves.
     func loadData() async {
         do {
@@ -27,7 +27,7 @@ extension AppState {
     }
 
     /// Earlier releases auto-added simulator disk images and cryptex mounts as
-    /// locations — enormous trees that never contain projects.
+    /// locations: enormous trees that never contain projects.
     private func removeJunkAutoDetectedLocations() async {
         let junkPrefixes = [
             "/Library/Developer/CoreSimulator",
@@ -79,7 +79,7 @@ extension AppState {
             isInitialLoad = false
             return
         }
-        // State moved while computing — a fresher emission is already queued
+        // State moved while computing; a fresher emission is already queued
         guard generation == projectsMutationGeneration else { return }
 
         collectionCounts = caches.collectionCounts
@@ -103,7 +103,7 @@ extension AppState {
         cachedDuplicateProjectIDs = caches.duplicateProjectIDs
         offlineVolumeNames = caches.offlineVolumes
 
-        // didSet recompute suppressed — caches above were computed off-main
+        // didSet recompute suppressed: the caches above were computed off-main
         isBatchUpdating = true
         projects = fetched
         isBatchUpdating = false
@@ -193,7 +193,6 @@ extension AppState {
             }
         }
 
-        // Sort projects by modified date descending (default sort)
         let sortedProjects = projects.sorted {
             ($0.modifiedDate ?? $0.filesystemModifiedDate) > ($1.modifiedDate ?? $1.filesystemModifiedDate)
         }
@@ -228,7 +227,7 @@ extension AppState {
     }
 
     /// External volumes are indexed by their `/Volumes/<name>` component, so a missing
-    /// mount point usually means the drive is unplugged — but volumes can also be
+    /// mount point usually means the drive is unplugged. But volumes can also be
     /// mounted elsewhere (network shares, secondary APFS volumes), so an existing
     /// project file always proves the volume is reachable. The boot volume never counts.
     private nonisolated static func offlineVolumes(volumeSamplePaths: [String: String]) -> Set<String> {

@@ -24,10 +24,8 @@ struct ProjectDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                // Header (always first)
                 headerSection
 
-                // Dynamic sections based on stored order
                 ForEach(sectionOrder) { section in
                     if shouldShowSection(section) {
                         Divider()
@@ -45,8 +43,8 @@ struct ProjectDetailView: View {
             await appState.refreshAbletonInstalls()
         }
         .onChange(of: project.id) { oldID, _ in
-            // Save pending note edits before switching — silently discarding
-            // typed text is the worst kind of data loss.
+            // Save pending note edits before switching, rather than discarding
+            // whatever the user had typed.
             if isEditingNotes,
                let oldProject = appState.projects.first(where: { $0.id == oldID }),
                editingNotes != (oldProject.userNotes ?? "") {
@@ -159,7 +157,6 @@ struct ProjectDetailView: View {
                 }
             }
 
-            // BPM and time signature badges
             HStack(spacing: 8) {
                 if let bpm = project.bpm {
                     BadgeView(label: "\(Int(bpm)) BPM", icon: "metronome")
@@ -292,7 +289,6 @@ struct ProjectDetailView: View {
                     .themedBadge(.accent)
                 }
 
-                // Add tag field
                 HStack(spacing: 4) {
                     TextField("Add tag", text: $newTag)
                         .textFieldStyle(.plain)

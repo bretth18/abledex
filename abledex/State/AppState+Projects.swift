@@ -25,8 +25,8 @@ extension AppState {
             abletonInstalls = installs
 
             if installs.count <= 1 {
-                // One install (or none — let LaunchServices decide, which may
-                // still find Live somewhere abledex does not look).
+                // One install, or none: let LaunchServices decide, since it may
+                // still find Live somewhere abledex does not look.
                 launch(project, with: installs.first)
             } else if let remembered = AbletonPreference.rememberedInstall(among: installs) {
                 launch(project, with: remembered)
@@ -260,10 +260,6 @@ extension AppState {
             }
             return updated
         }
-    }
-
-    func colorLabelCount(for label: ColorLabel) -> Int {
-        colorLabelCounts[label] ?? 0
     }
 
 }

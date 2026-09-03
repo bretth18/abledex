@@ -216,7 +216,6 @@ private final class JSONDecodeCache: @unchecked Sendable {
 
         lock.lock()
 
-        // Check cache first
         if let cached = cache[json] {
             // Stamp with the latest generation (most recently used)
             generation += 1
@@ -391,7 +390,6 @@ nonisolated enum CamelotConverter {
     ]
 
     static func toCamelot(_ key: String) -> String? {
-        // Direct lookup first
         if let camelot = camelotMap[key] {
             return camelot
         }

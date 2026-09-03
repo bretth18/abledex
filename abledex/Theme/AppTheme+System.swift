@@ -61,7 +61,7 @@ extension AppTheme {
         xmlBackground: NSColor.textBackgroundColor,
         xmlForeground: NSColor.textColor,
 
-        // Color labels — same as current behavior
+        // Color labels, matching current behavior
         colorLabelColors: [
             .none: .clear,
             .red: .red,

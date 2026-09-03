@@ -139,7 +139,7 @@ final class AudioPreviewService {
             duration = audioPlayer?.duration ?? 0
             playbackProgress = 0
 
-            // Start progress timer — fires on main run loop, no Task wrapper needed
+            // Progress timer fires on the main run loop, so it needs no Task wrapper
             progressTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] _ in
                 // Timer is on main run loop; MainActor check is compile-time only
                 MainActor.assumeIsolated {

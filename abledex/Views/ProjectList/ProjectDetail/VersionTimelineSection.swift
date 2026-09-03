@@ -43,7 +43,6 @@ struct VersionTimelineSection: View {
         let previousVersion = index > 0 ? versions[index - 1] : nil
 
         HStack(alignment: .top, spacing: 12) {
-            // Timeline connector
             VStack(spacing: 0) {
                 Circle()
                     .fill(isCurrent ? theme.accent : Color.secondary.opacity(0.5))
@@ -58,7 +57,6 @@ struct VersionTimelineSection: View {
             }
             .frame(width: 10)
 
-            // Version info
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
                     Text(version.name)
@@ -102,7 +100,6 @@ struct VersionTimelineSection: View {
                     }
                 }
 
-                // Quick stats
                 HStack(spacing: 12) {
                     if let bpm = version.bpm {
                         Label("\(Int(bpm))", systemImage: "metronome")
@@ -179,7 +176,6 @@ struct VersionTimelineSection: View {
         let pluginsAdded = Array(newPlugins.subtracting(oldPlugins))
         let pluginsRemoved = Array(oldPlugins.subtracting(newPlugins))
 
-        // Only return diff if there are changes
         if bpmChanged == nil && tracksDelta == 0 && pluginsAdded.isEmpty && pluginsRemoved.isEmpty {
             return nil
         }

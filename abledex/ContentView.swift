@@ -42,7 +42,7 @@ struct ContentView: View {
                 .toolbar {
                     ToolbarItemGroup {
                         #if DEBUG
-                        // A/B performance toggle — developer-only
+                        // A/B performance toggle, developer-only
                         Button {
                             appState.useNSTableView.toggle()
                         } label: {
@@ -51,7 +51,7 @@ struct ContentView: View {
                                 systemImage: appState.useNSTableView ? "tablecells" : "tablecells.badge.ellipsis"
                             )
                         }
-                        .help(appState.useNSTableView ? "Using NSTableView (AppKit) — click to switch to SwiftUI" : "Using SwiftUI Table — click to switch to NSTableView (AppKit)")
+                        .help(appState.useNSTableView ? "Using NSTableView (AppKit). Click to switch to SwiftUI." : "Using SwiftUI Table. Click to switch to NSTableView (AppKit).")
                         #endif
 
                         if activeCollection != nil {

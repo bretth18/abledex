@@ -82,7 +82,7 @@ extension AppState {
             ensureFileWatchers()
         case .failure(let error):
             if error is CancellationError {
-                // Batches saved before cancellation are already in the DB — show them.
+                // Batches saved before cancellation are already in the DB, so show them.
                 scanProgress = nil
             } else {
                 reportError("Scan Failed", error)
@@ -145,7 +145,7 @@ extension AppState {
             scannedCount += 1
             scanProgress = .parsing(current: scannedCount, total: total, projectName: project.name)
 
-            // scanSingleProject is @concurrent — parsing runs off the main actor.
+            // scanSingleProject is @concurrent, so parsing runs off the main actor.
             if (try? await scanner.scanSingleProject(alsFilePath: project.alsFilePath)) != nil {
                 updatedCount += 1
             }

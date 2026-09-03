@@ -17,7 +17,6 @@ struct XMLViewerSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // Header
             HStack {
                 Text("XML: \(project.name)")
                     .font(.headline)
@@ -45,7 +44,6 @@ struct XMLViewerSheet: View {
 
             Divider()
 
-            // Content
             if isLoading {
                 Spacer()
                 ProgressView("Loading XML...")

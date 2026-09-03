@@ -39,7 +39,7 @@ struct AbletonSettingsView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     } else if defaultPath == nil {
-                        Text("abledex asks which version to use, because several are installed and they share a bundle identifier — macOS cannot tell them apart on its own.")
+                        Text("Several versions are installed. They share a bundle identifier, so macOS cannot tell them apart on its own.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

@@ -135,7 +135,7 @@ nonisolated struct ALSParser: Sendable {
 
         // Check for gzip magic number
         guard data[0] == 0x1f && data[1] == 0x8b else {
-            // Not gzipped — might be raw XML
+            // Not gzipped; might be raw XML
             guard String(data: data, encoding: .utf8) != nil else {
                 throw ALSParserError.invalidXML
             }

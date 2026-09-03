@@ -65,7 +65,7 @@ extension AppState {
         }
     }
 
-    /// Prunes selection to visible rows — otherwise the batch toolbar, detail
+    /// Prunes selection to visible rows. Otherwise the batch toolbar, detail
     /// pane, and Delete key keep acting on projects the user can't see.
     func applyFilteredProjects(_ result: [ProjectRecord]) {
         cachedFilteredProjects = result
@@ -92,7 +92,6 @@ extension AppState {
             }
         }
 
-        // Apply category filter
         switch snapshot.selectedFilter {
         case .all:
             break
@@ -145,7 +144,6 @@ extension AppState {
             result = result.filter { snapshot.duplicateProjectIDs.contains($0.id) }
         }
 
-        // Apply sorting
         result.sort { a, b in
             let comparison: Bool
             switch snapshot.sortColumn {
@@ -258,7 +256,7 @@ extension AppState {
     }
 
     /// Toggles a sidebar section filter (status/tag/plugin/...), resetting the
-    /// Library filter so two highlighted rows don't silently AND into an empty
+    /// Library filter so two highlighted rows do not AND into an empty
     /// table. Batched into a single recompute.
     func toggleSectionFilter<T: Equatable>(_ keyPath: ReferenceWritableKeyPath<AppState, T?>, _ value: T) {
         isBatchUpdating = true

@@ -27,7 +27,6 @@ final class AppState {
         didSet {
             // Invalidates observation emissions computed against the old state
             projectsMutationGeneration &+= 1
-            // Skip if this is the initial load or batch update in progress
             guard !isInitialLoad, !isBatchUpdating else { return }
             recomputeCachedCounts()
             recomputeFilteredProjects()
@@ -37,10 +36,10 @@ final class AppState {
     var collections: [CollectionRecord] = []
     var selectedProjectIDs: Set<UUID> = [] {
         didSet {
-            // Low-frequency derived flags for the menu bar. Commands must NOT read
-            // selectedProjectIDs/projects directly: every mutation would rebuild the
-            // main menu, which crashes AppKit's menu impl when it lands mid-tracking
-            // (NSRangeException in NSContextMenuImpl). Only write on real transitions.
+            // Low-frequency derived flags for the menu bar. Commands must not read
+            // selectedProjectIDs/projects directly: every mutation rebuilds the main
+            // menu, which raises NSRangeException in NSContextMenuImpl when it lands
+            // mid-tracking. Only write on real transitions.
             let single = selectedProjectIDs.count == 1
             if hasSingleSelection != single { hasSingleSelection = single }
         }
@@ -48,7 +47,7 @@ final class AppState {
     private(set) var hasSingleSelection = false
 
     // Volumes that have indexed projects but are not currently mounted.
-    // Projects on offline drives stay in the index — tracking them is the app's core purpose.
+    // Projects on offline drives stay in the index.
     var offlineVolumeNames: Set<String> = []
 
     // MARK: - Error Surfacing
@@ -130,36 +129,28 @@ final class AppState {
         var newCollectionDoneCounts: [UUID: Int] = [:]
 
         for project in projects {
-            // Music project membership
             if let collectionID = project.collectionID {
                 newCollectionCounts[collectionID, default: 0] += 1
                 if project.completionStatus == .done {
                     newCollectionDoneCounts[collectionID, default: 0] += 1
                 }
             }
-            // Status
             newStatusCounts[project.completionStatus, default: 0] += 1
 
-            // Color label
             newColorLabelCounts[project.colorLabel, default: 0] += 1
 
-            // Volume
             newVolumeCounts[project.sourceVolume, default: 0] += 1
 
-            // Folder
             newFolderCounts[project.projectFolderName, default: 0] += 1
 
-            // Tags
             for tag in project.userTags {
                 newTagCounts[tag, default: 0] += 1
             }
 
-            // Plugins
             for plugin in project.plugins {
                 newPluginCounts[plugin, default: 0] += 1
             }
 
-            // Keys
             for key in project.musicalKeys {
                 newKeyCounts[key, default: 0] += 1
             }
@@ -184,7 +175,7 @@ final class AppState {
         cachedFoldersWithMultipleVersions = newFolderCounts.filter { $0.value > 1 }.keys.sorted()
         cachedProjectsByFolder = Dictionary(grouping: projects, by: { $0.projectFolderName })
 
-        // Debounced duplicate detection — avoids re-running O(n²) on every keystroke/edit
+        // Debounced so the O(n²) pass doesn't re-run on every keystroke or edit
         scheduleDuplicateRecomputation()
     }
 
