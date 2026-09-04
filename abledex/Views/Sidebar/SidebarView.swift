@@ -19,7 +19,7 @@ struct SidebarView: View {
     var body: some View {
         @Bindable var state = appState
 
-        List(selection: $state.selectedFilter) {
+        List(selection: $state.sidebarSelection) {
             HStack(alignment: .center) {
                 Image(.logopdf)
                     .renderingMode(.template)
@@ -71,7 +71,7 @@ struct SidebarView: View {
                 } icon: {
                     Image(systemName: filter.icon)
                 }
-                .tag(filter)
+                .tag(SidebarSelection.filter(filter))
             }
 
             if appState.duplicatesCount > 0 {

@@ -128,11 +128,14 @@ extension AppState {
         return await computeCaches(for: fetched)
     }
 
+    /// Whether the precomputed default-sorted list can be installed as-is.
+    /// Unlike hasActiveFilters this counts selectedCollectionID: a music
+    /// project scopes the visible rows even though it is navigation, not a filter.
     var hasNonDefaultFilterOrSort: Bool {
         !searchQuery.isEmpty || selectedFilter != .all || selectedVolumeFilter != nil ||
         selectedStatusFilter != nil || selectedColorLabelFilter != nil || selectedTagFilter != nil ||
         selectedPluginFilter != nil || selectedKeyFilter != nil || selectedFolderFilter != nil ||
-        selectedCollectionFilter != nil || showFavoritesOnly || showDuplicatesOnly ||
+        selectedCollectionID != nil || showFavoritesOnly || showDuplicatesOnly ||
         sortColumn != .modifiedDate || sortAscending
     }
 

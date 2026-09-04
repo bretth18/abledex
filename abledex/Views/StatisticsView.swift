@@ -49,6 +49,7 @@ struct StatisticsView: View {
                     StatCard(title: "Total Projects", value: "\(appState.projectCount)", icon: "music.note.list", color: .blue)
 
                     StatCard(title: "Favorites", value: "\(appState.favoritesCount)", icon: "star.fill", color: .yellow) {
+                        appState.showLibrary()
                         appState.clearAllFilters()
                         appState.showFavoritesOnly = true
                         dismiss()
@@ -87,6 +88,7 @@ struct StatisticsView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(stats.statusData, id: \.status) { item in
                                 Button {
+                                    appState.showLibrary()
                                     appState.clearAllFilters()
                                     appState.selectedStatusFilter = item.status
                                     dismiss()
@@ -131,6 +133,7 @@ struct StatisticsView: View {
                         VStack(spacing: 8) {
                             ForEach(cachedStorageByVolume, id: \.volume) { item in
                                 Button {
+                                    appState.showLibrary()
                                     appState.clearAllFilters()
                                     appState.selectedVolumeFilter = item.volume
                                     dismiss()
@@ -176,6 +179,7 @@ struct StatisticsView: View {
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                             ForEach(stats.keyDistribution.prefix(12), id: \.key) { item in
                                 Button {
+                                    appState.showLibrary()
                                     appState.clearAllFilters()
                                     appState.selectedKeyFilter = item.key
                                     dismiss()
@@ -297,6 +301,7 @@ struct StatisticsView: View {
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                             ForEach(stats.topPlugins.prefix(10), id: \.name) { plugin in
                                 Button {
+                                    appState.showLibrary()
                                     appState.clearAllFilters()
                                     appState.selectedPluginFilter = plugin.name
                                     dismiss()

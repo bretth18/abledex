@@ -26,7 +26,7 @@ extension AppState {
         var selectedPluginFilter: String?
         var selectedKeyFilter: String?
         var selectedFolderFilter: String?
-        var selectedCollectionFilter: UUID?
+        var selectedCollectionID: UUID?
         var showFavoritesOnly: Bool
         var showDuplicatesOnly: Bool
         var duplicateProjectIDs: Set<UUID>
@@ -50,7 +50,7 @@ extension AppState {
             selectedPluginFilter: selectedPluginFilter,
             selectedKeyFilter: selectedKeyFilter,
             selectedFolderFilter: selectedFolderFilter,
-            selectedCollectionFilter: selectedCollectionFilter,
+            selectedCollectionID: selectedCollectionID,
             showFavoritesOnly: showFavoritesOnly,
             showDuplicatesOnly: showDuplicatesOnly,
             duplicateProjectIDs: cachedDuplicateProjectIDs,
@@ -134,8 +134,9 @@ extension AppState {
         if let folderFilter = snapshot.selectedFolderFilter {
             result = result.filter { $0.projectFolderName == folderFilter }
         }
-        if let collectionFilter = snapshot.selectedCollectionFilter {
-            result = result.filter { $0.collectionID == collectionFilter }
+        // Scope, not a filter: this is the music project being viewed.
+        if let collectionID = snapshot.selectedCollectionID {
+            result = result.filter { $0.collectionID == collectionID }
         }
         if snapshot.showFavoritesOnly {
             result = result.filter { $0.isFavorite }
@@ -177,7 +178,7 @@ extension AppState {
         !searchQuery.isEmpty || selectedFilter != .all || selectedVolumeFilter != nil ||
         selectedStatusFilter != nil || selectedColorLabelFilter != nil || selectedTagFilter != nil ||
         selectedPluginFilter != nil || selectedKeyFilter != nil || selectedFolderFilter != nil ||
-        selectedCollectionFilter != nil || showFavoritesOnly || showDuplicatesOnly
+        showFavoritesOnly || showDuplicatesOnly
     }
 
     var selectedProject: ProjectRecord? {
@@ -272,6 +273,59 @@ extension AppState {
         recomputeFilteredProjects()
     }
 
+    /// The sidebar's current destination: a music project when one is open,
+    /// otherwise the selected Library row.
+    var sidebarSelection: SidebarSelection? {
+        get {
+            if let selectedCollectionID { return .collection(selectedCollectionID) }
+            return .filter(selectedFilter)
+        }
+        set {
+            switch newValue {
+            case .collection(let id): selectCollection(id)
+            case .filter(let filter): selectLibraryFilter(filter)
+            case nil: break
+            }
+        }
+    }
+
+    /// Returns to the main library on the given Library row. Assigning
+    /// selectedFilter alone would not do: selectCollection leaves it at .all,
+    /// so picking "All Projects" to leave a music project is a no-op write.
+    func selectLibraryFilter(_ filter: ProjectFilter) {
+        isBatchUpdating = true
+        selectedCollectionID = nil
+        selectedFilter = filter
+        isBatchUpdating = false
+        recomputeFilteredProjects()
+    }
+
+    /// Opens a music project's page, clearing library-wide filters so the whole
+    /// release is visible. Batched so it costs one recompute.
+    func selectCollection(_ collectionID: UUID) {
+        isBatchUpdating = true
+        selectedFilter = .all
+        selectedVolumeFilter = nil
+        selectedStatusFilter = nil
+        selectedColorLabelFilter = nil
+        selectedTagFilter = nil
+        selectedPluginFilter = nil
+        selectedKeyFilter = nil
+        selectedFolderFilter = nil
+        showFavoritesOnly = false
+        showDuplicatesOnly = false
+        searchQuery = ""
+        selectedCollectionID = collectionID
+        isBatchUpdating = false
+        recomputeFilteredProjects()
+    }
+
+    /// Leaves the current music project for the main library.
+    func showLibrary() {
+        guard selectedCollectionID != nil else { return }
+        selectedCollectionID = nil
+    }
+
     func clearAllFilters() {
         // Suppress recomputation during batch reset, trigger once at end
         isBatchUpdating = true
@@ -283,7 +337,6 @@ extension AppState {
         selectedPluginFilter = nil
         selectedKeyFilter = nil
         selectedFolderFilter = nil
-        selectedCollectionFilter = nil
         showFavoritesOnly = false
         showDuplicatesOnly = false
         searchQuery = ""

@@ -234,7 +234,10 @@ final class AppState {
     var selectedPluginFilter: String? { didSet { recomputeFilteredProjects() } }
     var selectedKeyFilter: String? { didSet { recomputeFilteredProjects() } }
     var selectedFolderFilter: String? { didSet { recomputeFilteredProjects() } }
-    var selectedCollectionFilter: UUID? { didSet { recomputeFilteredProjects() } }
+    /// The music project being viewed. This is navigation, not a filter: it
+    /// does not count towards hasActiveFilters and Clear Filters leaves it
+    /// alone. It still scopes the table, which is why the filter pass reads it.
+    var selectedCollectionID: UUID? { didSet { recomputeFilteredProjects() } }
     var showFavoritesOnly: Bool = false { didSet { recomputeFilteredProjects() } }
     var showDuplicatesOnly: Bool = false { didSet { recomputeFilteredProjects() } }
 

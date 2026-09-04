@@ -10,7 +10,6 @@ import SwiftUI
 struct MusicProjectsSection: View {
     @Binding var expandedSections: Set<SidebarSection>
     @Environment(AppState.self) private var appState
-    @Environment(\.theme) private var theme
 
     @State private var showNewCollectionSheet = false
     @State private var newCollectionName = ""
@@ -59,29 +58,24 @@ struct MusicProjectsSection: View {
         }
     }
 
+    // A destination, so it takes the source list's selection rather than
+    // highlighting itself the way the scoping filter rows below do.
     private func row(_ collection: CollectionRecord) -> some View {
         let progress = appState.collectionProgress(collection)
-        return Button {
-            appState.toggleSectionFilter(\.selectedCollectionFilter, collection.id)
-        } label: {
-            Label {
-                HStack {
-                    Text(collection.name)
-                    Spacer()
-                    Text("\(progress.done)/\(progress.total)")
-                        .font(.caption)
-                        .monospacedDigit()
-                        .foregroundStyle(.secondary)
-                }
-            } icon: {
-                Image(systemName: collection.status == .released ? "checkmark.seal.fill" : collection.kind.icon)
-                    .foregroundStyle(.tint)
+        return Label {
+            HStack {
+                Text(collection.name)
+                Spacer()
+                Text("\(progress.done)/\(progress.total)")
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
             }
+        } icon: {
+            Image(systemName: collection.status == .released ? "checkmark.seal.fill" : collection.kind.icon)
+                .foregroundStyle(.tint)
         }
-        .buttonStyle(.plain)
-        .listRowBackground(
-            appState.selectedCollectionFilter == collection.id ? theme.surfaceSelected : Color.clear
-        )
+        .tag(SidebarSelection.collection(collection.id))
         .contextMenu {
             Button("Rename...") {
                 renameText = collection.name
@@ -155,7 +149,7 @@ struct MusicProjectsSection: View {
                     Task {
                         do {
                             let collection = try await appState.createCollection(name: name, kind: newCollectionKind)
-                            appState.selectedCollectionFilter = collection.id
+                            appState.selectCollection(collection.id)
                         } catch {
                             appState.reportError("Failed to Create Music Project", error)
                         }

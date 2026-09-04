@@ -31,8 +31,8 @@ extension AppState {
         // Membership rows clear in the same transaction; observation reconciles
         try await database.deleteCollection(id: collection.id)
         collections.removeAll { $0.id == collection.id }
-        if selectedCollectionFilter == collection.id {
-            selectedCollectionFilter = nil
+        if selectedCollectionID == collection.id {
+            selectedCollectionID = nil
         }
     }
 

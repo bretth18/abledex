@@ -31,7 +31,7 @@ struct ContentView: View {
                     ProjectTableView()
                 }
             }
-            .onChange(of: appState.selectedCollectionFilter) {
+            .onChange(of: appState.selectedCollectionID) {
                 // A newly opened collection always lands on its release page.
                 showsCollectionTable = false
             }
@@ -103,7 +103,7 @@ struct ContentView: View {
     }
 
     private var activeCollection: CollectionRecord? {
-        guard let id = appState.selectedCollectionFilter else { return nil }
+        guard let id = appState.selectedCollectionID else { return nil }
         return appState.collections.first { $0.id == id }
     }
 
