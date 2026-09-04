@@ -35,7 +35,7 @@ struct ProjectDetailView: View {
             }
             .padding()
         }
-        .frame(minWidth: 300)
+        .frame(minWidth: 300, idealWidth: 300)
         .onAppear {
             editingNotes = project.userNotes ?? ""
         }
