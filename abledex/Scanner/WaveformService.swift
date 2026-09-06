@@ -125,7 +125,7 @@ enum WaveformExtractor {
                 var frameRange = min(chunkFrames - offset, bucketEnd - globalFrame)
                 if frameRange <= 0 {
                     // Decoder yielded more frames than AVAudioFile.length estimated
-                    // (VBR/corrupt files) — fold the remainder into the last bucket
+                    // (VBR/corrupt files); fold the remainder into the last bucket
                     // instead of spinning forever or passing a negative count to vDSP.
                     frameRange = chunkFrames - offset
                 }

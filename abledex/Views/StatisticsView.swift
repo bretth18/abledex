@@ -24,7 +24,6 @@ struct StatisticsView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
-                // Header
                 HStack(alignment: .firstTextBaseline) {
                     Text("Stats")
                         .font(.largeTitle.bold())
@@ -41,7 +40,6 @@ struct StatisticsView: View {
                     .buttonStyle(.accessoryBar)
                 }
 
-                // Overview cards
                 LazyVGrid(columns: [
                     GridItem(.flexible()),
                     GridItem(.flexible()),
@@ -51,6 +49,7 @@ struct StatisticsView: View {
                     StatCard(title: "Total Projects", value: "\(appState.projectCount)", icon: "music.note.list", color: .blue)
 
                     StatCard(title: "Favorites", value: "\(appState.favoritesCount)", icon: "star.fill", color: .yellow) {
+                        appState.showLibrary()
                         appState.clearAllFilters()
                         appState.showFavoritesOnly = true
                         dismiss()
@@ -63,13 +62,11 @@ struct StatisticsView: View {
 
                 Divider()
 
-                // Status breakdown
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Status Breakdown")
                         .font(.headline)
 
                     HStack(spacing: 24) {
-                        // Chart
                         Chart(stats.statusData, id: \.status) { item in
                             SectorMark(
                                 angle: .value("Count", item.count),
@@ -91,6 +88,7 @@ struct StatisticsView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             ForEach(stats.statusData, id: \.status) { item in
                                 Button {
+                                    appState.showLibrary()
                                     appState.clearAllFilters()
                                     appState.selectedStatusFilter = item.status
                                     dismiss()
@@ -115,7 +113,6 @@ struct StatisticsView: View {
 
                 Divider()
 
-                // Storage by Volume
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Storage by Volume")
                         .font(.headline)
@@ -136,6 +133,7 @@ struct StatisticsView: View {
                         VStack(spacing: 8) {
                             ForEach(cachedStorageByVolume, id: \.volume) { item in
                                 Button {
+                                    appState.showLibrary()
                                     appState.clearAllFilters()
                                     appState.selectedVolumeFilter = item.volume
                                     dismiss()
@@ -169,7 +167,6 @@ struct StatisticsView: View {
 
                 Divider()
 
-                // Key Distribution
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Key Distribution")
                         .font(.headline)
@@ -182,6 +179,7 @@ struct StatisticsView: View {
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                             ForEach(stats.keyDistribution.prefix(12), id: \.key) { item in
                                 Button {
+                                    appState.showLibrary()
                                     appState.clearAllFilters()
                                     appState.selectedKeyFilter = item.key
                                     dismiss()
@@ -213,7 +211,6 @@ struct StatisticsView: View {
 
                 Divider()
 
-                // BPM distribution
                 VStack(alignment: .leading, spacing: 12) {
                     Text("BPM Distribution")
                         .font(.headline)
@@ -230,13 +227,11 @@ struct StatisticsView: View {
 
                 Divider()
 
-                // Activity Trends
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Activity Trends")
                         .font(.headline)
 
                     HStack(spacing: 24) {
-                        // Weekly chart
                         VStack(alignment: .leading) {
                             Text("Projects Created (Last 6 Months)")
                                 .font(.subheadline)
@@ -258,7 +253,6 @@ struct StatisticsView: View {
                             .frame(height: 150)
                         }
 
-                        // Day of week breakdown
                         VStack(alignment: .leading, spacing: 8) {
                             Text("By Day of Week")
                                 .font(.subheadline)
@@ -295,7 +289,6 @@ struct StatisticsView: View {
 
                 Divider()
 
-                // Top plugins
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Most Used Plugins")
                         .font(.headline)
@@ -308,6 +301,7 @@ struct StatisticsView: View {
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                             ForEach(stats.topPlugins.prefix(10), id: \.name) { plugin in
                                 Button {
+                                    appState.showLibrary()
                                     appState.clearAllFilters()
                                     appState.selectedPluginFilter = plugin.name
                                     dismiss()
@@ -332,7 +326,6 @@ struct StatisticsView: View {
 
                 Divider()
 
-                // Projects over time
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Projects by Month")
                         .font(.headline)
@@ -429,7 +422,7 @@ struct StatisticsView: View {
 
 /// All derived statistics for the projects list, computed in a single pass
 /// so the view body only reads precomputed values.
-private struct ProjectStats: Sendable {
+private nonisolated struct ProjectStats: Sendable {
     var averageBPM = "-"
     var totalDuration = "0m"
     var statusData: [(status: CompletionStatus, count: Int)] = []

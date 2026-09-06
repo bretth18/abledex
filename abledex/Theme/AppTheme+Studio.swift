@@ -35,7 +35,7 @@ extension AppTheme {
             accent: abletonOrange,
             accentSubtle: abletonOrange.opacity(0.1),
 
-            // Status — brighter for contrast on dark
+            // Status, brightened for contrast on dark
             statusNone: Color(white: 0.55),
             statusIdea: Color(red: 1.0, green: 0.85, blue: 0.2),
             statusInProgress: Color(red: 0.3, green: 0.6, blue: 1.0),
@@ -64,7 +64,7 @@ extension AppTheme {
             xmlBackground: NSColor(white: 0.08, alpha: 1.0),
             xmlForeground: NSColor(white: 0.85, alpha: 1.0),
 
-            // Color labels — boosted saturation+brightness for dark background
+            // Color labels, saturation and brightness boosted for a dark background
             colorLabelColors: [
                 .none: .clear,
                 .red: Color(red: 1.0, green: 0.35, blue: 0.35),

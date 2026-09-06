@@ -155,6 +155,8 @@ struct ProjectRecord: Codable, Sendable, Identifiable, Equatable, FetchableRecor
 
     // Music project (EP/album) this project belongs to, if any
     var collectionID: UUID? = nil
+    // Track order within that music project; nil sorts last
+    var collectionPosition: Int? = nil
 
     enum Columns: String, ColumnExpression {
         case id
@@ -189,6 +191,7 @@ struct ProjectRecord: Codable, Sendable, Identifiable, Equatable, FetchableRecor
         case isFavorite
         case lastOpenedAt
         case collectionID
+        case collectionPosition
     }
 }
 
@@ -213,7 +216,6 @@ private final class JSONDecodeCache: @unchecked Sendable {
 
         lock.lock()
 
-        // Check cache first
         if let cached = cache[json] {
             // Stamp with the latest generation (most recently used)
             generation += 1
@@ -338,7 +340,7 @@ extension ProjectRecord {
 
 // MARK: - Camelot Notation Converter
 
-enum CamelotConverter {
+nonisolated enum CamelotConverter {
     // Camelot wheel mapping: key name -> Camelot code
     private static let camelotMap: [String: String] = [
         // Major keys (B column)
@@ -388,7 +390,6 @@ enum CamelotConverter {
     ]
 
     static func toCamelot(_ key: String) -> String? {
-        // Direct lookup first
         if let camelot = camelotMap[key] {
             return camelot
         }

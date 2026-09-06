@@ -20,7 +20,7 @@ struct AbledexApp: App {
             _appState = State(initialValue: AppState(database: database))
             databaseError = nil
         } catch {
-            // Don't crash at launch on a corrupted DB or full disk — fall back to a
+            // Don't crash at launch on a corrupted DB or full disk. Fall back to a
             // temporary in-memory database and surface the error to the user.
             _appState = State(initialValue: AppState(database: try! AppDatabase.empty()))
             databaseError = error
@@ -37,7 +37,7 @@ struct AbledexApp: App {
                 .tint(themeManager.current.usesCustomBackground ? themeManager.current.accent : nil)
                 .windowBackground(themeManager.current.windowBackground)
                 .task {
-                    // This .task re-runs on every window open — launch work must run once
+                    // This .task re-runs on every window open, so launch work must run once
                     guard !didRunLaunchTask else { return }
                     didRunLaunchTask = true
 
@@ -50,6 +50,7 @@ struct AbledexApp: App {
                     }
                     await appState.loadData()
                     appState.startVolumeMonitoring()
+                    await appState.refreshAbletonInstalls()
 
                     await appState.startAutomaticIndexing()
                 }
@@ -103,9 +104,9 @@ struct AbledexApp: App {
                 .keyboardShortcut("e", modifiers: [.command, .shift])
             }
 
-            // NB: items here read only low-frequency state (hasSingleSelection) —
-            // reading selectedProject/projects would rebuild the main menu on every
-            // selection change or scan batch, which can crash AppKit's menu system
+            // Items here read only low-frequency state (hasSingleSelection).
+            // Reading selectedProject/projects rebuilds the main menu on every
+            // selection change or scan batch, which crashes AppKit's menu system
             // when the rebuild lands while a menu is open.
             CommandMenu("Project") {
                 Button("Open in Ableton Live") {
@@ -201,7 +202,7 @@ struct AbledexApp: App {
     private func showNoUpdateAlert() {
         let alert = NSAlert()
         alert.messageText = "You're Up to Date"
-        alert.informativeText = "Abledex \(UpdateService.shared.currentVersion) is currently the newest version available."
+        alert.informativeText = "Abledex \(UpdateService.shared.currentVersion) is the newest version."
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
         alert.runModal()

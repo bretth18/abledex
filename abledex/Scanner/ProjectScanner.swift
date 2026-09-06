@@ -53,7 +53,7 @@ private actor ScanCoordinator {
 
 // This module defaults to MainActor isolation, and under
 // NonisolatedNonsendingByDefault a plain nonisolated async function still runs
-// on the CALLER's actor — the @concurrent entry points are what actually keep
+// on the CALLER's actor. The @concurrent entry points are what keep
 // the crawl and parsing off the main thread.
 nonisolated final class ProjectScanner: Sendable {
     private let database: AppDatabase
@@ -120,7 +120,7 @@ nonisolated final class ProjectScanner: Sendable {
         try await scanLocation(location, forceReparse: forceReparse, coordinator: nil, progress: progress)
     }
 
-    /// Parse workers per location — bounds peak memory per in-flight parse.
+    /// Parse workers per location, bounding peak memory per in-flight parse.
     private static let parseConcurrency = max(2, min(6, ProcessInfo.processInfo.activeProcessorCount - 2))
 
     /// Parsed records accumulated per database write.
@@ -138,7 +138,7 @@ nonisolated final class ProjectScanner: Sendable {
         progress(.discovering(location: location.displayName))
 
         // An unreachable root (unmounted drive, deleted folder) is not an empty
-        // library — skip entirely so its records are neither reparsed nor pruned.
+        // library, so skip it entirely: its records are neither reparsed nor pruned.
         guard FileManager.default.fileExists(atPath: location.path) else {
             return 0
         }
@@ -352,7 +352,7 @@ nonisolated final class ProjectScanner: Sendable {
     /// 3. Neither resolves -> missing.
     ///
     /// References whose absolute path lives on an unmounted external volume are
-    /// treated as NOT missing — the sample may well exist, the drive is just
+    /// treated as NOT missing: the sample may exist, the drive is merely
     /// offline, and flagging it would be a false alarm.
     ///
     /// Internal (not private) so unit tests can exercise resolution directly.
@@ -415,7 +415,7 @@ nonisolated final class ProjectScanner: Sendable {
 
         for reference in references {
             // Ableton-managed content (factory packs, Core/User Library) is resolved
-            // through Live's own browser index — a stale absolute path there says
+            // through Live's own browser index, where a stale absolute path says
             // nothing about whether the sample is actually available.
             if [reference.absolutePath, reference.relativePath]
                 .compactMap({ $0 })
@@ -425,7 +425,7 @@ nonisolated final class ProjectScanner: Sendable {
 
             if let absolutePath = reference.absolutePath {
                 if let root = volumeRoot(of: absolutePath), !isVolumeMounted(root) {
-                    // Volume is offline — can't verify, don't raise a false alarm
+                    // Volume is offline, so it can't be verified; don't raise a false alarm
                     continue
                 }
                 if fileExists(absolutePath) {

@@ -35,11 +35,11 @@ struct WindowBackgroundModifier: ViewModifier {
 /// Applies the theme's window background at the AppKit level.
 ///
 /// Layout safety: `updateNSView` can fire inside `NSHostingView.layout()`, so it
-/// must never mutate the window or its view hierarchy synchronously — doing so
+/// must never mutate the window or its view hierarchy synchronously. Doing so
 /// triggers "It's not legal to call -layoutSubtreeIfNeeded on a view which is
 /// already being laid out". All mutation is therefore:
-///   1. Deferred to the next runloop turn (coalesced — at most one pending apply).
-///   2. Idempotent — every setter is guarded by a value check, and a whole apply
+///   1. Deferred to the next runloop turn (coalesced to one pending apply).
+///   2. Idempotent: every setter is guarded by a value check, and a whole apply
 ///      is skipped when the last-applied theme color and window are unchanged,
 ///      so repeated SwiftUI update passes never dirty AppKit layout.
 private struct WindowBackgroundSetter: NSViewRepresentable {
@@ -62,8 +62,8 @@ private struct WindowBackgroundSetter: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: WindowObservingView, context: Context) {
-        // No synchronous window/view mutation here — just record the desired
-        // color and schedule a deferred, coalesced apply.
+        // No synchronous window/view mutation here: record the desired color
+        // and schedule a deferred, coalesced apply.
         context.coordinator.setDesiredColor(color, host: nsView)
     }
 
@@ -116,7 +116,7 @@ private struct WindowBackgroundSetter: NSViewRepresentable {
             guard let window = hostView?.window else { return }
 
             // Skip entirely if this exact theme color is already applied to
-            // this window — the common case on every SwiftUI update pass.
+            // this window, the common case on every SwiftUI update pass.
             if hasApplied, window === appliedWindow, appliedColor == desiredColor {
                 return
             }

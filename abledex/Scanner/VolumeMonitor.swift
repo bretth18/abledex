@@ -16,7 +16,7 @@ final class VolumeMonitor: Sendable {
 
     // DiskArbitration replays a "disk appeared" callback for every volume that
     // is already mounted when callbacks register. Those are launch noise, not
-    // mounts — remember what was mounted at start() and swallow their replay.
+    // mounts, so remember what was mounted at start() and swallow their replay.
     private let initiallyMountedPaths = Mutex<Set<String>>([])
 
     private let onMount: @Sendable (URL, String) -> Void
@@ -99,7 +99,7 @@ final class VolumeMonitor: Sendable {
         }
         if wasAlreadyMounted { return }
 
-        // Only user-visible drives mount under /Volumes — simulator disk
+        // Only user-visible drives mount under /Volumes. Simulator disk
         // images and cryptexes mount elsewhere and never hold music projects.
         guard volumePath.path.hasPrefix("/Volumes/") else { return }
 

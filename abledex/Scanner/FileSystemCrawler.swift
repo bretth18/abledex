@@ -23,14 +23,14 @@ nonisolated struct FileSystemCrawler: Sendable {
 
     /// Directory names whose entire subtrees are skipped during crawling.
     /// These never contain a user's main .als files and can hold thousands of entries.
-    /// "Samples" is handled separately — it's only Ableton-managed when it sits
+    /// "Samples" is handled separately: it's only Ableton-managed when it sits
     /// inside a project folder; a user-level folder named Samples may hold projects.
     private static let skippedDirectoryNames: Set<String> = [
         "Backup", "Trash", "Ableton Project Info"
     ]
 
-    /// True when `directory` directly contains an .als file — i.e. it is an
-    /// Ableton project folder, so its Samples/ subfolder is Ableton-managed.
+    /// True when `directory` directly contains an .als file, making it an
+    /// Ableton project folder whose Samples/ subfolder is Ableton-managed.
     private static func isAbletonProjectFolder(_ directory: URL, cache: inout [String: Bool]) -> Bool {
         let key = directory.path
         if let cached = cache[key] { return cached }
@@ -77,7 +77,7 @@ nonisolated struct FileSystemCrawler: Sendable {
 
         while let fileURL = enumerator.nextObject() as? URL {
             entryCount += 1
-            // Crawl is synchronous — poll for cancellation periodically
+            // The crawl is synchronous, so poll for cancellation periodically
             if entryCount % 100 == 0, Task.isCancelled {
                 throw CancellationError()
             }

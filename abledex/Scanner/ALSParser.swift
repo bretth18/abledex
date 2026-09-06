@@ -11,7 +11,7 @@ import Compression
 /// A sample file reference extracted from a `<FileRef>` block.
 /// Modern Live (10/11/12) stores both an absolute `<Path Value="...">` and a
 /// project-relative `<RelativePath Value="...">`. Either may be absent.
-struct SampleFileReference: Sendable, Hashable {
+nonisolated struct SampleFileReference: Sendable, Hashable {
     let absolutePath: String?
     let relativePath: String?
 
@@ -21,7 +21,7 @@ struct SampleFileReference: Sendable, Hashable {
     }
 }
 
-struct ParsedProjectData: Sendable {
+nonisolated struct ParsedProjectData: Sendable {
     var bpm: Double?
     var timeSignatureNumerator: Int?
     var timeSignatureDenominator: Int?
@@ -135,7 +135,7 @@ nonisolated struct ALSParser: Sendable {
 
         // Check for gzip magic number
         guard data[0] == 0x1f && data[1] == 0x8b else {
-            // Not gzipped — might be raw XML
+            // Not gzipped; might be raw XML
             guard String(data: data, encoding: .utf8) != nil else {
                 throw ALSParserError.invalidXML
             }
@@ -246,7 +246,7 @@ nonisolated struct ALSParser: Sendable {
 ///
 /// Attribute values in ALS XML never contain a raw '<' (it is entity-escaped),
 /// so scanning for '<' via memchr never false-positives inside a value.
-private final class ALSStreamScanner {
+private nonisolated final class ALSStreamScanner {
     private var result = ParsedProjectData()
 
     /// Unprocessed tail of the previous chunk + the current chunk.

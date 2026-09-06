@@ -20,7 +20,6 @@ struct ProjectTableView: View {
         @Bindable var state = appState
 
         VStack(spacing: 0) {
-            // Batch operations toolbar
             if appState.selectedProjectIDs.count > 1 {
                 batchToolbar
             }
@@ -103,7 +102,7 @@ struct ProjectTableView: View {
 
                 TableColumn("Modified", value: \.sortableModified) { project in
                     let date = project.modifiedDate ?? project.filesystemModifiedDate
-                    // Formatted once — Text(_, style: .relative) schedules per-second
+                    // Formatted once: Text(_, style: .relative) schedules per-second
                     // re-renders for every visible row
                     Text(date.formatted(.relative(presentation: .named)))
                         .foregroundStyle(.secondary)
@@ -160,17 +159,9 @@ struct ProjectTableView: View {
                     .foregroundStyle(.secondary)
                 }
                 .width(min: 80, ideal: 120)
-                
-                /// TODO: refactor table to allow more than 10 columns so we can add this back in
-//                TableColumn("Color") { project in
-//                    Label(String(project.colorLabel.label), systemImage: "tag.fill")
-//                        .font(.caption)
-//                        .foregroundStyle(project.colorLabel.color)
-//                }
-//                .width(min: 80, ideal: 100)
-                
 
-                
+                // SwiftUI's Table tops out at 10 columns, so there is no room for
+                // a Color column. The color label tints the Name cell instead.
             } rows: {
                 ForEach(appState.filteredProjects) { project in
                     TableRow(project)
@@ -196,7 +187,7 @@ struct ProjectTableView: View {
                         }
                     } else if !appState.searchQuery.isEmpty {
                         ContentUnavailableView.search(text: appState.searchQuery)
-                            .allowsHitTesting(false) // no actions — don't swallow table clicks
+                            .allowsHitTesting(false) // no actions, so don't swallow table clicks
                     } else {
                         ContentUnavailableView {
                             Label("No Matching Projects", systemImage: "line.3.horizontal.decrease.circle")
@@ -215,7 +206,6 @@ struct ProjectTableView: View {
                     showDeleteConfirmation = true
                 }
             }
-            // Keyboard shortcuts
             .onKeyPress(.return) {
                 if let project = appState.selectedProject {
                     appState.openProject(project)
@@ -316,7 +306,6 @@ struct ProjectTableView: View {
             Divider()
                 .frame(height: 20)
 
-            // Status menu
             Menu {
                 ForEach(CompletionStatus.allCases, id: \.self) { status in
                     Button {
@@ -411,13 +400,15 @@ struct ProjectTableView: View {
 
     @ViewBuilder
     private func contextMenu(for project: ProjectRecord) -> some View {
-        // Batch menu only when the clicked row is part of the multi-selection —
-        // right-clicking an unselected row must act on that row, not the others.
+        // Batch menu only when the clicked row is part of the multi-selection.
+        // Right-clicking an unselected row must act on that row, not the others.
         if appState.selectedProjectIDs.count > 1 && appState.selectedProjectIDs.contains(project.id) {
-            // Multi-selection context menu
             Button("Open \(appState.selectedProjectIDs.count) Projects in Ableton") {
-                for proj in appState.selectedProjects {
-                    appState.openProject(proj)
+                appState.openProjects(appState.selectedProjects)
+            }
+            if appState.abletonInstalls.count > 1 {
+                Menu("Open \(appState.selectedProjectIDs.count) Projects With") {
+                    OpenWithMenuItems(projects: appState.selectedProjects)
                 }
             }
             Button("Reveal \(appState.selectedProjectIDs.count) Projects in Finder") {
@@ -457,9 +448,13 @@ struct ProjectTableView: View {
                 showDeleteConfirmation = true
             }
         } else {
-            // Single selection context menu
             Button("Open in Ableton") {
                 appState.openProject(project)
+            }
+            if appState.abletonInstalls.count > 1 {
+                Menu("Open With") {
+                    OpenWithMenuItems(project: project)
+                }
             }
             Button("Reveal in Finder") {
                 appState.revealProject(project)

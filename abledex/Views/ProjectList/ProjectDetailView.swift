@@ -24,10 +24,8 @@ struct ProjectDetailView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                // Header (always first)
                 headerSection
 
-                // Dynamic sections based on stored order
                 ForEach(sectionOrder) { section in
                     if shouldShowSection(section) {
                         Divider()
@@ -37,13 +35,16 @@ struct ProjectDetailView: View {
             }
             .padding()
         }
-        .frame(minWidth: 300)
+        .frame(minWidth: 300, idealWidth: 300)
         .onAppear {
             editingNotes = project.userNotes ?? ""
         }
+        .task {
+            await appState.refreshAbletonInstalls()
+        }
         .onChange(of: project.id) { oldID, _ in
-            // Save pending note edits before switching — silently discarding
-            // typed text is the worst kind of data loss.
+            // Save pending note edits before switching, rather than discarding
+            // whatever the user had typed.
             if isEditingNotes,
                let oldProject = appState.projects.first(where: { $0.id == oldID }),
                editingNotes != (oldProject.userNotes ?? "") {
@@ -156,7 +157,6 @@ struct ProjectDetailView: View {
                 }
             }
 
-            // BPM and time signature badges
             HStack(spacing: 8) {
                 if let bpm = project.bpm {
                     BadgeView(label: "\(Int(bpm)) BPM", icon: "metronome")
@@ -179,6 +179,18 @@ struct ProjectDetailView: View {
                 Label("Open", systemImage: "play.fill")
             }
             .buttonStyle(.borderedProminent)
+
+            if appState.abletonInstalls.count > 1 {
+                Menu {
+                    OpenWithMenuItems(project: project)
+                } label: {
+                    Label("Open With", systemImage: "chevron.down")
+                        .labelStyle(.iconOnly)
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+                .help("Open with a specific version of Live")
+            }
 
             Button {
                 appState.revealProject(project)
@@ -277,7 +289,6 @@ struct ProjectDetailView: View {
                     .themedBadge(.accent)
                 }
 
-                // Add tag field
                 HStack(spacing: 4) {
                     TextField("Add tag", text: $newTag)
                         .textFieldStyle(.plain)
@@ -707,211 +718,5 @@ struct ProjectDetailView: View {
             try? await appState.updateProjectNotes(project, notes: editingNotes)
             isEditingNotes = false
         }
-    }
-}
-
-// MARK: - Supporting Views
-
-struct XMLViewerSheet: View {
-    let project: ProjectRecord
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.theme) private var theme
-    @State private var xmlContent: String = ""
-    @State private var isLoading: Bool = true
-    @State private var errorMessage: String?
-    @State private var xmlSize: Int = 0
-
-    var body: some View {
-        VStack(spacing: 0) {
-            // Header
-            HStack {
-                Text("XML: \(project.name)")
-                    .font(.headline)
-                if xmlSize > 0 {
-                    Text("(\(ByteCountFormatter.string(fromByteCount: Int64(xmlSize), countStyle: .file)))")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(xmlContent, forType: .string)
-                } label: {
-                    Label("Copy", systemImage: "doc.on.doc")
-                }
-                .buttonStyle(.bordered)
-                .disabled(xmlContent.isEmpty)
-
-                Button("Done") {
-                    dismiss()
-                }
-                .buttonStyle(.borderedProminent)
-            }
-            .padding()
-
-            Divider()
-
-            // Content
-            if isLoading {
-                Spacer()
-                ProgressView("Loading XML...")
-                Spacer()
-            } else if let error = errorMessage {
-                Spacer()
-                VStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .font(.largeTitle)
-                        .foregroundStyle(.orange)
-                    Text(error)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-            } else {
-                XMLTextView(text: xmlContent, backgroundColor: theme.xmlBackground, foregroundColor: theme.xmlForeground)
-            }
-        }
-        .frame(minWidth: 700, minHeight: 500)
-        .background(theme.usesCustomBackground ? theme.background.ignoresSafeArea() : nil)
-        .task {
-            await loadXML()
-        }
-    }
-
-    private func loadXML() async {
-        let filePath = URL(fileURLWithPath: project.alsFilePath)
-
-        // Run on background thread with low priority to avoid competing with scan I/O
-        let result: Result<String, Error> = await Task.detached(priority: .background) {
-            let parser = ALSParser()
-            return Result { try parser.getRawXML(alsFilePath: filePath) }
-        }.value
-
-        switch result {
-        case .success(let xml):
-            xmlContent = xml
-            xmlSize = xml.utf8.count
-            isLoading = false
-        case .failure(let error):
-            errorMessage = error.localizedDescription
-            isLoading = false
-        }
-    }
-}
-
-/// NSTextView wrapper for performant large text display.
-/// Uses Coordinator to set text off the main layout pass to avoid UI stalls.
-struct XMLTextView: NSViewRepresentable {
-    let text: String
-    var backgroundColor: NSColor = .textBackgroundColor
-    var foregroundColor: NSColor = .textColor
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSTextView.scrollableTextView()
-        let textView = scrollView.documentView as! NSTextView
-
-        textView.isEditable = false
-        textView.isSelectable = true
-        textView.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
-        textView.backgroundColor = backgroundColor
-        textView.textContainerInset = NSSize(width: 8, height: 8)
-        textView.isAutomaticQuoteSubstitutionEnabled = false
-        textView.isAutomaticDashSubstitutionEnabled = false
-        textView.isAutomaticTextReplacementEnabled = false
-        textView.isAutomaticSpellingCorrectionEnabled = false
-
-        // Disable word wrap for XML (horizontal scroll)
-        textView.isHorizontallyResizable = true
-        textView.textContainer?.widthTracksTextView = false
-        textView.textContainer?.containerSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
-
-        // Disable layout during initial load
-        textView.layoutManager?.allowsNonContiguousLayout = true
-
-        context.coordinator.textView = textView
-
-        return scrollView
-    }
-
-    func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        let textView = context.coordinator.textView!
-        textView.backgroundColor = backgroundColor
-
-        guard context.coordinator.currentText != text else { return }
-        context.coordinator.currentText = text
-
-        // Set text content with layout temporarily disabled to avoid stalling
-        textView.textStorage?.beginEditing()
-        textView.textStorage?.setAttributedString(NSAttributedString(
-            string: text,
-            attributes: [
-                .font: NSFont.monospacedSystemFont(ofSize: 11, weight: .regular),
-                .foregroundColor: foregroundColor
-            ]
-        ))
-        textView.textStorage?.endEditing()
-    }
-
-    class Coordinator {
-        var textView: NSTextView?
-        var currentText: String = ""
-    }
-}
-
-struct FlowLayout: Layout {
-    var spacing: CGFloat = 8
-
-    struct CachedLayout {
-        var size: CGSize
-        var frames: [CGRect]
-    }
-
-    func makeCache(subviews: Subviews) -> CachedLayout? {
-        nil
-    }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout CachedLayout?) -> CGSize {
-        let result = arrange(proposal: proposal, subviews: subviews)
-        cache = result
-        return result.size
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout CachedLayout?) {
-        let result = cache ?? arrange(proposal: proposal, subviews: subviews)
-
-        for (index, frame) in result.frames.enumerated() {
-            subviews[index].place(
-                at: CGPoint(x: bounds.minX + frame.minX, y: bounds.minY + frame.minY),
-                proposal: ProposedViewSize(frame.size)
-            )
-        }
-    }
-
-    private func arrange(proposal: ProposedViewSize, subviews: Subviews) -> CachedLayout {
-        let width = proposal.width ?? .infinity
-        var frames: [CGRect] = []
-        var x: CGFloat = 0
-        var y: CGFloat = 0
-        var rowHeight: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-
-            if x + size.width > width && x > 0 {
-                x = 0
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
-
-            frames.append(CGRect(x: x, y: y, width: size.width, height: size.height))
-            rowHeight = max(rowHeight, size.height)
-            x += size.width + spacing
-        }
-
-        let totalHeight = y + rowHeight
-        return CachedLayout(size: CGSize(width: width, height: totalHeight), frames: frames)
     }
 }

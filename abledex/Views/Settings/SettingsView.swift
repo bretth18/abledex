@@ -28,6 +28,12 @@ struct SettingsView: View {
                     Label("Locations", systemImage: "folder")
                 }
 
+            AbletonSettingsView()
+                .environment(appState)
+                .tabItem {
+                    Label("Ableton", systemImage: "waveform")
+                }
+
             UpdatesSettingsView()
                 .tabItem {
                     Label("Updates", systemImage: "arrow.triangle.2.circlepath")

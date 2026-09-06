@@ -9,8 +9,8 @@ import Foundation
 import CoreServices
 
 /// One FSEvents stream over one volume's locations. Starting with a persisted
-/// `sinceEventID` replays the journal — including changes made while the app
-/// wasn't running — through the same handler as live events.
+/// `sinceEventID` replays the journal through the same handler as live
+/// events, including changes made while the app wasn't running.
 ///
 /// `.device` streams take their event IDs from the volume's own journal, so
 /// they stay meaningful across unmount/remount and across machines; callers
@@ -26,12 +26,12 @@ nonisolated final class FileSystemWatcher: @unchecked Sendable {
 
         var isDirectory: Bool { flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemIsDir) != 0 }
         /// The journal couldn't represent every change (e.g. the persisted event
-        /// ID predates the journal's history) — the subtree must be re-crawled.
+        /// ID predates the journal's history). The subtree must be re-crawled.
         var mustScanSubDirs: Bool { flags & FSEventStreamEventFlags(kFSEventStreamEventFlagMustScanSubDirs) != 0 }
         var wasCreated: Bool { flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemCreated) != 0 }
         var wasRemoved: Bool { flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemRemoved) != 0 }
         var wasRenamed: Bool { flags & FSEventStreamEventFlags(kFSEventStreamEventFlagItemRenamed) != 0 }
-        /// Volume lifecycle noise — mount/unmount is handled by VolumeMonitor.
+        /// Volume lifecycle noise; mount/unmount is handled by VolumeMonitor.
         var isMountOrUnmount: Bool {
             flags & FSEventStreamEventFlags(kFSEventStreamEventFlagMount | kFSEventStreamEventFlagUnmount) != 0
         }
@@ -81,7 +81,7 @@ nonisolated final class FileSystemWatcher: @unchecked Sendable {
     }
 
     /// Identifies the epoch of a volume's FSEvents journal. Persisted event IDs
-    /// are only valid while this matches — a changed UUID means the journal was
+    /// are only valid while this matches; a changed UUID means the journal was
     /// rebuilt and a full rescan of that volume is required. nil when the
     /// volume has no journal at all (replay impossible).
     static func journalUUID(forDevice device: dev_t) -> String? {
@@ -89,7 +89,7 @@ nonisolated final class FileSystemWatcher: @unchecked Sendable {
         return CFUUIDCreateString(kCFAllocatorDefault, uuid) as String?
     }
 
-    /// The device journal's most recent event ID — a "since now" baseline in
+    /// The device journal's most recent event ID, a "since now" baseline in
     /// the device's own ID space.
     static func lastEventID(forDevice device: dev_t) -> FSEventStreamEventId {
         FSEventsGetLastEventIdForDeviceBeforeTime(device, CFAbsoluteTimeGetCurrent())
