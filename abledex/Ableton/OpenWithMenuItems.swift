@@ -21,20 +21,19 @@ struct OpenWithMenuItems: View {
 
     var body: some View {
         ForEach(appState.abletonInstalls) { install in
-            Button {
+            Button(title(for: install)) {
                 for project in projects {
                     appState.openProject(project, using: install)
                 }
-            } label: {
-                Label(
-                    install.isBeta ? "\(install.displayName) (Beta)" : install.displayName,
-                    systemImage: isDefault(install) ? "checkmark" : "waveform"
-                )
             }
         }
     }
 
-    private func isDefault(_ install: AbletonInstall) -> Bool {
-        AbletonPreference.alwaysOpenWithPath == install.id
+    private func title(for install: AbletonInstall) -> String {
+        var title = install.isBeta ? "\(install.displayName) (Beta)" : install.displayName
+        if AbletonPreference.alwaysOpenWithPath == install.id {
+            title += " (Default)"
+        }
+        return title
     }
 }

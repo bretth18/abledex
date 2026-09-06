@@ -12,141 +12,105 @@ struct OpenWithAbletonSheet: View {
 
     @Environment(AppState.self) private var appState
     @Environment(\.theme) private var theme
-    @State private var selection: AbletonInstall?
+    @State private var selectedID: AbletonInstall.ID?
     @State private var alwaysUse = false
 
     private var projectVersion: String? { pending.project.abletonVersion }
-
     private var openCount: Int { 1 + pending.additionalProjects.count }
+
+    private var selection: AbletonInstall? {
+        pending.installs.first { $0.id == selectedID }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
-            Divider()
+                .padding(20)
 
-            ScrollView {
-                VStack(spacing: 6) {
-                    ForEach(pending.installs) { install in
-                        installRow(install)
-                    }
-                }
-                .padding(12)
+            List(pending.installs, selection: $selectedID) { install in
+                row(install)
             }
-            .frame(maxHeight: 260)
+            .listStyle(.bordered)
+            .scrollContentBackground(theme.usesCustomBackground ? .hidden : .automatic)
+            .frame(height: CGFloat(min(pending.installs.count, 5)) * 48 + 4)
+            .padding(.horizontal, 20)
 
-            Divider()
             footer
+                .padding(20)
         }
-        .frame(width: 420)
+        .frame(width: 440)
         .background(theme.usesCustomBackground ? theme.background : nil)
         .onAppear {
-            // Preselect the install that matches the version the set was saved
-            // with; otherwise the newest one that can open it at all.
-            let matchesSet = { (install: AbletonInstall) in
-                install.majorMinor != nil && install.majorMinor == AbletonInstall.majorMinor(of: projectVersion)
-            }
-            // installs are already ordered releases-first, newest-first.
-            selection = pending.installs.first { matchesSet($0) && !$0.isBeta }
+            // Prefer the release matching the version the set was saved with,
+            // then any matching beta, then the newest install that can open it.
+            // Installs are ordered releases first, newest first.
+            selectedID = (
+                pending.installs.first { matchesSet($0) && !$0.isBeta }
                 ?? pending.installs.first(where: matchesSet)
                 ?? pending.installs.first { $0.canOpenProject(savedWith: projectVersion) }
                 ?? pending.installs.first
+            )?.id
         }
     }
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text(openCount > 1 ? "Open \(openCount) Projects With" : "Open With")
+            Text(openCount > 1 ? "Open ^[\(openCount) Projects](inflect: true) With" : "Open With")
                 .font(.headline)
 
-            if openCount > 1 {
-                Text("You have several versions of Live installed.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                HStack(spacing: 4) {
-                    Text(pending.project.name)
-                        .fontWeight(.medium)
+            if openCount == 1 {
+                if let projectVersion {
+                    Text("\(pending.project.name) · saved in Live \(projectVersion)")
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
-                    if let projectVersion {
-                        Text("· saved in Live \(projectVersion)")
-                            .foregroundStyle(.secondary)
-                    }
+                } else {
+                    Text(pending.project.name)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }
-                .font(.caption)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(16)
     }
 
-    private func installRow(_ install: AbletonInstall) -> some View {
-        let isSelected = selection == install
-        let matchesProject = install.majorMinor != nil
-            && install.majorMinor == AbletonInstall.majorMinor(of: projectVersion)
-        let isOlder = !install.canOpenProject(savedWith: projectVersion)
+    private func row(_ install: AbletonInstall) -> some View {
+        HStack(spacing: 10) {
+            AppIconView(url: install.url)
+                .frame(width: 32, height: 32)
 
-        return Button {
-            selection = install
-        } label: {
-            HStack(spacing: 12) {
-                AppIconView(url: install.url)
-                    .frame(width: 32, height: 32)
-
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
-                        Text(install.displayName)
-                            .fontWeight(isSelected ? .semibold : .regular)
-                        if install.isBeta {
-                            Text("BETA")
-                                .font(.system(size: 9, weight: .bold))
-                                .themedBadge(.tinted(.orange))
-                        }
-                        if matchesProject {
-                            Text("MATCHES SET")
-                                .font(.system(size: 9, weight: .bold))
-                                .themedBadge(.tinted(.green))
-                        }
-                    }
-
-                    if isOlder, let projectVersion {
-                        Label("Older than the set (saved in \(projectVersion))", systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption2)
-                            .foregroundStyle(.orange)
-                    } else {
-                        Text(install.url.path)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
-
-                Spacer()
-
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary.opacity(0.4))
+            VStack(alignment: .leading, spacing: 2) {
+                Text(install.isBeta ? "\(install.displayName) (Beta)" : install.displayName)
+                Text(install.url.deletingLastPathComponent().path(percentEncoded: false))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(isSelected ? theme.accentSubtle : theme.surfacePrimary)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-            .overlay(
-                RoundedRectangle(cornerRadius: 8)
-                    .stroke(isSelected ? Color.accentColor : Color.clear, lineWidth: 1.5)
-            )
-            .contentShape(Rectangle())
+
+            Spacer()
+
+            if !install.canOpenProject(savedWith: projectVersion) {
+                Label("Older than this set", systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else if matchesSet(install) {
+                Text("Matches set")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
-        .buttonStyle(.plain)
+        .padding(.vertical, 4)
+        .tag(install.id)
     }
 
     private var footer: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Toggle("Always open with this version", isOn: $alwaysUse)
-                .font(.callout)
-
-            Text("You can change this later in Settings › Ableton.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 2) {
+                Toggle("Always open with this version", isOn: $alwaysUse)
+                Text("Change this later in Settings > Ableton.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             HStack {
                 Spacer()
@@ -160,15 +124,17 @@ struct OpenWithAbletonSheet: View {
                     appState.completePendingOpen(with: selection, remember: alwaysUse)
                 }
                 .keyboardShortcut(.defaultAction)
-                .buttonStyle(.borderedProminent)
                 .disabled(selection == nil)
             }
         }
-        .padding(16)
+    }
+
+    private func matchesSet(_ install: AbletonInstall) -> Bool {
+        install.majorMinor != nil && install.majorMinor == AbletonInstall.majorMinor(of: projectVersion)
     }
 }
 
-/// The real Finder icon for an application bundle.
+/// The Finder icon for an application bundle.
 struct AppIconView: View {
     let url: URL
 

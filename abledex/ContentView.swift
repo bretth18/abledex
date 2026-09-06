@@ -36,52 +36,50 @@ struct ContentView: View {
                 showsCollectionTable = false
             }
             .navigationSplitViewColumnWidth(min: 400, ideal: 600)
-                .navigationTitle(navigationTitle)
-                .navigationSubtitle("^[\(appState.filteredProjects.count) project](inflect: true)")
-                .searchable(text: $state.searchQuery, prompt: "Search projects, plugins, tags...")
-                .toolbar {
-                    ToolbarItemGroup {
-                        #if DEBUG
-                        // A/B performance toggle, developer-only
-                        Button {
-                            appState.useNSTableView.toggle()
-                        } label: {
-                            Label(
-                                appState.useNSTableView ? "NSTableView" : "SwiftUI Table",
-                                systemImage: appState.useNSTableView ? "tablecells" : "tablecells.badge.ellipsis"
-                            )
-                        }
-                        .help(appState.useNSTableView ? "Using NSTableView (AppKit). Click to switch to SwiftUI." : "Using SwiftUI Table. Click to switch to NSTableView (AppKit).")
-                        #endif
-
-                        if activeCollection != nil {
-                            Picker("View", selection: $showsCollectionTable) {
-                                Image(systemName: "list.number").tag(false)
-                                Image(systemName: "tablecells").tag(true)
-                            }
-                            .pickerStyle(.segmented)
-                            .help(showsCollectionTable ? "Showing the table" : "Showing the release page")
-                        }
-
-                        Button {
-                            showStatistics = true
-                        } label: {
-                            Label("Statistics", systemImage: "chart.pie")
-                        }
-
-                        sortMenu
+            .navigationTitle(navigationTitle)
+            .navigationSubtitle("^[\(appState.filteredProjects.count) project](inflect: true)")
+            .searchable(text: $state.searchQuery, prompt: "Search projects, plugins, tags")
+            .toolbar {
+                ToolbarItemGroup {
+                    #if DEBUG
+                    // A/B performance toggle, developer-only
+                    Button {
+                        appState.useNSTableView.toggle()
+                    } label: {
+                        Label(
+                            appState.useNSTableView ? "NSTableView" : "SwiftUI Table",
+                            systemImage: appState.useNSTableView ? "tablecells" : "tablecells.badge.ellipsis"
+                        )
                     }
+                    .help(appState.useNSTableView ? "Using NSTableView (AppKit). Click to switch to SwiftUI." : "Using SwiftUI Table. Click to switch to NSTableView (AppKit).")
+                    #endif
+
+                    if activeCollection != nil {
+                        Picker("View", selection: $showsCollectionTable) {
+                            Label("Release", systemImage: "list.number").tag(false)
+                            Label("Table", systemImage: "tablecells").tag(true)
+                        }
+                        .pickerStyle(.segmented)
+                        .labelStyle(.iconOnly)
+                        .help("Show the release page or the table")
+                    }
+
+                    Button {
+                        showStatistics = true
+                    } label: {
+                        Label("Statistics", systemImage: "chart.pie")
+                    }
+
+                    sortMenu
                 }
+            }
         } detail: {
             if let project = appState.selectedProject {
                 ProjectDetailView(project: project)
                     .navigationSplitViewColumnWidth(min: 300, ideal: 350)
-                
-            
             } else {
                 ProjectDetailEmptyView()
                     .navigationSplitViewColumnWidth(min: 64, ideal: 90, max: 300)
-                    
             }
         }
         .navigationSplitViewStyle(.balanced)
@@ -153,8 +151,6 @@ struct ContentView: View {
         }
     }
 }
-
-
 
 #Preview {
     ContentView()

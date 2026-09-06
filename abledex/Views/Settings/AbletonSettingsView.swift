@@ -14,57 +14,46 @@ struct AbletonSettingsView: View {
 
     var body: some View {
         Form {
-            Section {
-                if isLoading {
-                    HStack(spacing: 6) {
-                        ProgressView().scaleEffect(0.7)
-                        Text("Looking for Ableton Live...")
-                            .foregroundStyle(.secondary)
-                    }
-                } else if installs.isEmpty {
-                    Text("No copy of Ableton Live was found in /Applications.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    Picker("Open projects with", selection: choiceBinding) {
-                        Text("Ask every time").tag(String?.none)
-                        Divider()
-                        ForEach(installs) { install in
-                            Text(install.isBeta ? "\(install.displayName) (Beta)" : install.displayName)
-                                .tag(String?.some(install.id))
-                        }
-                    }
-
-                    if installs.count == 1 {
-                        Text("Only one version is installed, so abledex opens projects with it directly.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    } else if defaultPath == nil {
-                        Text("Several versions are installed. They share a bundle identifier, so macOS cannot tell them apart on its own.")
-                            .font(.caption)
+            if isLoading {
+                Section("Opening Projects") {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("Looking for Ableton Live…")
                             .foregroundStyle(.secondary)
                     }
                 }
-            } header: {
-                Text("Opening Projects")
-            }
+            } else if installs.isEmpty {
+                Section("Opening Projects") {
+                    Text("Ableton Live is not installed in the Applications folder.")
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                if installs.count > 1 {
+                    Section {
+                        Picker("Open projects with", selection: choiceBinding) {
+                            Text("Ask Every Time").tag(String?.none)
+                            Divider()
+                            ForEach(installs) { install in
+                                Text(name(of: install)).tag(String?.some(install.id))
+                            }
+                        }
+                    } header: {
+                        Text("Opening Projects")
+                    } footer: {
+                        Text("Choosing “Ask Every Time” shows a list of installed versions whenever you open a project.")
+                    }
+                }
 
-            if !installs.isEmpty {
-                Section {
+                Section("Installed Versions") {
                     ForEach(installs) { install in
                         HStack(spacing: 10) {
                             AppIconView(url: install.url)
                                 .frame(width: 28, height: 28)
                             VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    Text(install.displayName)
-                                    if install.isBeta {
-                                        Text("BETA")
-                                            .font(.system(size: 9, weight: .bold))
-                                            .themedBadge(.tinted(.orange))
-                                    }
-                                }
-                                Text(install.url.path)
-                                    .font(.caption2)
+                                Text(name(of: install))
+                                Text(install.url.path(percentEncoded: false))
+                                    .font(.caption)
                                     .foregroundStyle(.secondary)
                                     .lineLimit(1)
                                     .truncationMode(.middle)
@@ -72,15 +61,13 @@ struct AbletonSettingsView: View {
                             Spacer()
                             if let build = install.build {
                                 Text(build)
-                                    .font(.caption2)
+                                    .font(.caption)
                                     .monospaced()
                                     .foregroundStyle(.tertiary)
                             }
                         }
                         .padding(.vertical, 2)
                     }
-                } header: {
-                    Text("^[\(installs.count) Version](inflect: true) Installed")
                 }
             }
         }
@@ -89,6 +76,10 @@ struct AbletonSettingsView: View {
         .task {
             await reload()
         }
+    }
+
+    private func name(of install: AbletonInstall) -> String {
+        install.isBeta ? "\(install.displayName) (Beta)" : install.displayName
     }
 
     private var choiceBinding: Binding<String?> {
@@ -104,9 +95,8 @@ struct AbletonSettingsView: View {
     private func reload() async {
         installs = await AbletonInstallFinder.findInstalls()
         appState.abletonInstalls = installs
-        // A remembered install that has since been deleted would silently fall
-        // back to asking; reflect that in the picker rather than showing a
-        // selection that no longer exists.
+        // A remembered install that has since been deleted falls back to
+        // asking; show that instead of a selection that no longer exists.
         if let path = defaultPath, !installs.contains(where: { $0.id == path }) {
             defaultPath = nil
             AbletonPreference.clear()

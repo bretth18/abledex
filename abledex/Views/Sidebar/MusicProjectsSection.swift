@@ -121,23 +121,21 @@ struct MusicProjectsSection: View {
     }
 
     private var newCollectionSheet: some View {
-        VStack(spacing: 16) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("New Music Project")
                 .font(.headline)
 
-            TextField("Name (e.g. Summer EP)", text: $newCollectionName)
-                .textFieldStyle(.roundedBorder)
-                .frame(width: 240)
-
-            Picker("Type", selection: $newCollectionKind) {
-                ForEach(CollectionKind.allCases, id: \.self) { kind in
-                    Text(kind.label).tag(kind)
+            Form {
+                TextField("Name", text: $newCollectionName, prompt: Text("Summer EP"))
+                Picker("Type", selection: $newCollectionKind) {
+                    ForEach(CollectionKind.allCases, id: \.self) { kind in
+                        Text(kind.label).tag(kind)
+                    }
                 }
             }
-            .pickerStyle(.menu)
-            .fixedSize()
 
             HStack {
+                Spacer()
                 Button("Cancel") {
                     showNewCollectionSheet = false
                 }
@@ -160,8 +158,8 @@ struct MusicProjectsSection: View {
                 .disabled(newCollectionName.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
-        .padding()
-        .frame(width: 300)
+        .padding(20)
+        .frame(width: 340)
     }
 
     private func save(_ collection: CollectionRecord, failure: String) {

@@ -7,6 +7,9 @@ import SwiftUI
 
 /// The release page for a music project: what it is, how far along it is, and
 /// its tracks in running order.
+///
+/// A single List so the tracks get native selection, keyboard navigation and
+/// drag reordering. The hero and notes are unselectable rows.
 struct CollectionDetailView: View {
     let collection: CollectionRecord
 
@@ -23,87 +26,50 @@ struct CollectionDetailView: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                CollectionHeroView(collection: collection, summary: summary)
-                tracklist
-                notes
-            }
-            .padding(20)
-        }
-        .background(theme.usesCustomBackground ? theme.background : nil)
-    }
+        @Bindable var state = appState
 
-    // MARK: - Tracklist
+        List(selection: $state.selectedProjectIDs) {
+            CollectionHeroView(collection: collection, summary: summary)
+                .listRowInsets(EdgeInsets(top: 12, leading: 20, bottom: 12, trailing: 20))
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .selectionDisabled()
 
-    @ViewBuilder
-    private var tracklist: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Tracks")
-                    .font(.headline)
-                Spacer()
-                if summary.trackCount > 1 {
-                    Text("Drag to reorder")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
-                }
-            }
-
-            if tracks.isEmpty {
-                ContentUnavailableView {
-                    Label("No Tracks Yet", systemImage: collection.kind.icon)
-                } description: {
-                    Text("Right-click projects in the library and choose Music Project › \(collection.name).")
-                }
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 24)
-                .themedCard()
-            } else {
-                LazyVStack(spacing: 2) {
+            Section("Tracks") {
+                if tracks.isEmpty {
+                    ContentUnavailableView {
+                        Label("No Tracks", systemImage: collection.kind.icon)
+                    } description: {
+                        Text("Right-click projects in the library and choose Music Project > \(collection.name).")
+                    }
+                    .listRowSeparator(.hidden)
+                    .selectionDisabled()
+                } else {
                     ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
                         CollectionTrackRow(
                             track: track,
                             position: index + 1,
                             useCamelotNotation: useCamelotNotation
                         )
-                        .draggable(track.id.uuidString) {
-                            Text(track.name).padding(6)
-                        }
-                        .dropDestination(for: String.self) { items, _ in
-                            move(items, above: index)
-                        }
                     }
+                    .onMove(perform: move)
                 }
-                .themedCard()
+            }
+
+            if let notes = collection.notes, !notes.isEmpty {
+                Section("Notes") {
+                    Text(notes)
+                        .selectionDisabled()
+                }
             }
         }
+        .listStyle(.inset)
+        .scrollContentBackground(theme.usesCustomBackground ? .hidden : .automatic)
     }
 
-    @ViewBuilder
-    private var notes: some View {
-        if let notes = collection.notes, !notes.isEmpty {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Notes")
-                    .font(.headline)
-                Text(notes)
-                    .font(.callout)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding()
-                    .themedCard()
-            }
-        }
-    }
-
-    /// Moves the dragged track to `destination`, then persists the new order.
-    private func move(_ items: [String], above destination: Int) -> Bool {
-        guard let dragged = items.first.flatMap(UUID.init(uuidString:)) else { return false }
+    private func move(from source: IndexSet, to destination: Int) {
         var ordered = tracks
-        guard let source = ordered.firstIndex(where: { $0.id == dragged }), source != destination else { return false }
-
-        let track = ordered.remove(at: source)
-        ordered.insert(track, at: min(destination, ordered.count))
-
+        ordered.move(fromOffsets: source, toOffset: destination)
         Task {
             do {
                 try await appState.reorderCollection(collection, to: ordered)
@@ -111,6 +77,5 @@ struct CollectionDetailView: View {
                 appState.reportError("Failed to Reorder Tracks", error)
             }
         }
-        return true
     }
 }
