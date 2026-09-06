@@ -154,5 +154,5 @@ struct ContentView: View {
 
 #Preview {
     ContentView()
-        .environment(AppState(database: try! .empty()))
+         .environment(AppState(database: try! .empty()))
 }
